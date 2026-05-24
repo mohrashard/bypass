@@ -21,6 +21,7 @@ const OPTIONS_META: Record<string, string> = {
   makeVertical: '📱 Face-Tracking Vertical',
   cinematicColor: '🎨 Cinematic Color Grade',
   bottomGlow: '🌌 Cinematic Bottom Glow',
+  autoTransitions: '✨ Auto Sentence Transitions',
 };
 
 export default function App() {
@@ -43,6 +44,7 @@ export default function App() {
     makeVertical: false,
     cinematicColor: false,
     bottomGlow: false,
+    autoTransitions: false,
     glowColor: '#000000',
 
     captionFont: 'Montserrat',

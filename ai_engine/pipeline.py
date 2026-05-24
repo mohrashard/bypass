@@ -267,6 +267,17 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
                 "end":   w["end"]
             })
  
+    # ── NEW: Extract Whisper Punctuation for the Transition Engine ──
+    flash_times = []
+    for i, w_info in enumerate(word_events):
+        word_text = w_info["word"]
+        if "." in word_text or "?" in word_text or "!" in word_text:
+            if i + 1 < len(word_events):
+                flash_times.append(float(word_events[i+1]["start"]))
+                
+    with open(os.path.join(base_dir, "_flash_times.json"), "w") as f:
+        json.dump(flash_times, f)
+
     # ── Video dimensions ───────────────────────────────────────
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -598,6 +609,8 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
         model = genai.GenerativeModel('gemini-flash-latest')
  
         # 4. The strict prompt to prevent hallucination and force formatting
+        # 4. The strict prompt to prevent hallucination and force formatting
+        # 4. The strict prompt to prevent hallucination and force formatting
         prompt = """
         Listen to this audio. It is a mix of Sinhala and English (Singlish).
         Write down EXACTLY what is said, verbatim.
@@ -605,22 +618,32 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
         CRITICAL RULES: 
         1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
         2. Break the text into short, logical phrases of exactly 3 to 5 words each.
-        3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe" , commission). 
-        4. NUMBER FORMATTING: Convert all spoken Sinhala or English numbers into actual digits (e.g., "රුපියල් පන්දහක්" must become "රුපියල් 5000").
-        5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., if "engineer කෙනෙක්" keep it as "engineer කෙනෙක්", keep "direct වැඩගන්න"  "direct වැඩගන්න" , "බාස්").
-        6. KEYWORDS: Professional field engineer , commission , field engineer , direct , scam , skill , follow , comment , බාස් (dont hallucinate)
+        3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission"). 
+        4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").
+        5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්").
+        6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
+        7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.
+        8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:
+           - THE HOOK: The very first attention-grabbing statement or question.
+           - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").
+           - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.
+           DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.
         
         You must provide the approximate start and end times for each phrase in seconds.
         Output strictly as a JSON array. Example:
         [
-          {"phrase": "ඔයාගෙත් leak වෙනවද", "start": 0.1, "end": 1.2},
-          {"phrase": "රුපියල් 5000 ක් නිකන්ම", "start": 1.3, "end": 2.5}
+          {"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2},
+          {"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2},
+          {"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}
         ]
         Do not include any markdown formatting. Just the raw JSON array.
         """
  
         print("[⚙️] Generating 99% accurate transcript...")
-        response = model.generate_content([prompt, audio_file])
+        response = model.generate_content(
+            [prompt, audio_file],
+            generation_config={"response_mime_type": "application/json"}
+        )
         
         # Clean up the file from Google's servers
         genai.delete_file(audio_file.name)
@@ -881,6 +904,19 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
             for p in gemini_phrases
         ]
 
+    # ── NEW: Extract your Full-Stops for the Transition Engine ──
+    flash_times = []
+    for i, item in enumerate(segments_data):
+        phrase_text = str(item.get("phrase", ""))
+        # If the AI marked this phrase with a full stop or question mark
+        if "." in phrase_text or "?" in phrase_text or "!" in phrase_text:
+            # We want the transition to hit exactly as the NEXT sentence starts
+            if i + 1 < len(segments_data):
+                flash_times.append(float(segments_data[i+1]["start"]))
+                
+    with open(os.path.join(base_dir, "_flash_times.json"), "w") as f:
+        json.dump(flash_times, f)
+
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height,r_frame_rate",
@@ -954,8 +990,12 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
         page.set_content(make_base_html(W, H), wait_until="networkidle")
 
         for i, item in enumerate(segments_data):
-            phrase_text = str(item.get("phrase", "")).strip()
-            if not phrase_text: continue
+            # Grab the raw text first
+            raw_text = str(item.get("phrase", "")).strip()
+            if not raw_text: continue
+            
+            # THE MAGIC TRICK: Strip the pipe and any weird punctuation so it never renders on screen
+            phrase_text = raw_text.replace("|", "").replace(".", "").replace(",", "").strip()
 
             start_time = float(item.get("start", 0))
             end_time   = float(item.get("end", start_time + 1.0))
@@ -1850,9 +1890,99 @@ temp_audio,
     return output_vid
 
 
+# ─────────────────────────────────────────────
+# 11. AUTO TRANSITIONS ENGINE
+# ─────────────────────────────────────────────
+
+def stage_hardcode_flash(video_path: str, options: dict) -> str:
+    import subprocess
+    import os
+    import json
+
+    print("[⚙️] Loading AI Director timestamps for Hardcoded Camera Flashes...")
+    base_dir = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_flashes.mp4"
+    json_path = os.path.join(base_dir, "_flash_times.json")
+    
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+    sfx_audio = os.path.join(engine_dir, "assets", "whoosh_sfx.MP3") 
+
+    flash_times = []
+    if os.path.exists(json_path):
+        with open(json_path, "r") as f:
+            flash_times = json.load(f)
+        os.remove(json_path) # Clean up
+
+    if not flash_times:
+        print("[⚙️] No cinematic cuts (|) detected. Skipping transitions.")
+        return video_path
+
+    print(f"[🎬] Found {len(flash_times)} precise Director cuts. Compositing Camera Flashes...")
+
+    # 1. VISUAL: Hardcode the math for the camera flash fade
+    # This spikes the brightness to 1.0 (pure white) and fades to 0.0 (normal) over 0.3 seconds
+    exprs = []
+    for t in flash_times:
+        exprs.append(f"if(between(t,{t:.3f},{t+0.3:.3f}), 1-(t-{t:.3f})/0.3, 0)")
+    
+    full_expr = " + ".join(exprs)
+    vf_chain = f"eq=eval=frame:brightness='{full_expr}'"
+
+    # 2. AUDIO: Map your whoosh_sfx.MP3 to the exact same timestamps
+    inputs = ["-i", video_path]
+    filter_complex_a = ""
+    audio_mix_inputs = "[0:a]"
+    audio_map = "0:a"
+    
+    has_sfx = os.path.exists(sfx_audio)
+    if has_sfx:
+        inputs.extend(["-i", sfx_audio])
+        for idx, t_start in enumerate(flash_times):
+            aud_out = f"[a_delayed_{idx}]"
+            delay_ms = int(max(0, t_start) * 1000)
+            # [1:a] is the SFX file
+            filter_complex_a += f"[1:a]adelay={delay_ms}|{delay_ms}{aud_out};"
+            audio_mix_inputs += aud_out
+            
+        total_inputs = len(flash_times) + 1
+        filter_complex_a += f"{audio_mix_inputs}amix=inputs={total_inputs}:duration=first:dropout_transition=2:normalize=0[a_final]"
+        audio_map = "[a_final]"
+    else:
+        print("[⚠️] whoosh_sfx.MP3 missing in assets/. Proceeding with visual flash only.")
+
+    # 3. Execution
+    cmd = ["ffmpeg"] + inputs
+    
+    if has_sfx:
+        cmd.extend(["-filter_complex", filter_complex_a])
+    
+    cmd.extend([
+        "-vf", vf_chain,
+        "-map", "0:v",
+        "-map", audio_map,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k",
+        output_vid, "-y"
+    ])
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        print(f"[✅] Hardcoded Camera Flashes applied over everything: {output_vid}")
+        return output_vid
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        print(f"[❌] Flashes failed: {err_msg}")
+        return video_path
+
+
 def run_pipeline(video_path: str, options_json: str) -> None:
     options = json.loads(options_json)
     print(f"\n[🎬] STARTING LOCAL RENDER ENGINE: {os.path.basename(video_path)}\n")
+
+    if not os.path.exists(video_path):
+        print(f"[❌] FATAL: Input video not found at path: {video_path}")
+        print("Please re-select the video in the UI.")
+        return
 
     current_video = video_path
 
@@ -1866,7 +1996,6 @@ def run_pipeline(video_path: str, options_json: str) -> None:
     if options.get("studioAudio"):
         current_video = stage_studio_audio(current_video)
 
-    # NEW: Auto-Zoom Punch-ins
     if options.get("autoZoom"):
         current_video = stage_semantic_zoom(current_video, options)
 
@@ -1886,7 +2015,11 @@ def run_pipeline(video_path: str, options_json: str) -> None:
         else:
             current_video = stage_burn_captions(current_video, options)
 
-    # ── CapCut overlay export (runs independently, doesn't change current_video) ──
+    # ── MOVED TO THE BOTTOM SO FLASHES COVER THE CAPTIONS ──
+    if options.get("autoTransitions"):
+        current_video = stage_hardcode_flash(current_video, options)
+
+    # ── CapCut overlay export ──
     if options.get("exportCaptionOverlay"):
         lang = options.get("captionLanguage", "en")
         if lang == "si":
