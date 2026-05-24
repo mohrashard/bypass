@@ -5,6 +5,8 @@ import subprocess
 import io
 import warnings
 import pathlib
+from dotenv import load_dotenv
+load_dotenv()
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageChops
 
 # ─── Windows Fix ─────────────────────────────
@@ -227,28 +229,25 @@ def stage_cinematic_color(video_path: str, color_options: dict) -> str:
 # ─────────────────────────────────────────────
 # 5. WHISPER CAPTION ENGINE (Glass Silver Montserrat)
 # ─────────────────────────────────────────────
-
+ 
 def stage_burn_captions(video_path: str, cap_options: dict) -> str:
+    import whisper
     import json, shutil, subprocess, os
     from playwright.sync_api import sync_playwright
-
-    print("[⚙️] Loading Whisper large-v3 (GPU-accelerated)...")
-    try:
-        from faster_whisper import WhisperModel
-        w_model = WhisperModel("large-v3", device="cuda", compute_type="float16")
-    except Exception:
-        w_model = WhisperModel("large-v3", device="cpu", compute_type="int8")
-
+ 
+    print("[⚙️] Loading Whisper model...")
+    model = whisper.load_model("large")
+ 
     base_dir   = os.path.dirname(os.path.abspath(video_path))
     output_vid = os.path.splitext(video_path)[0] + "_captioned.mp4"
     ovr_dir    = os.path.join(base_dir, "_cap_overlays")
     os.makedirs(ovr_dir, exist_ok=True)
-
+ 
     # Extract template options from frontend
     font_family = cap_options.get("captionFont", "Montserrat")
     p_class = cap_options.get("captionPrimaryStyle", "p-glass-silver")
     s_class = cap_options.get("captionSecondaryStyle", "s-hormozi-yellow")
-
+ 
     # ── Whisper transcription ──────────────────────────────────
     temp_audio = os.path.join(base_dir, "_whisper_audio.wav")
     subprocess.run(
@@ -256,24 +255,18 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
          "-ar", "16000", "-ac", "1", temp_audio, "-y"],
         check=True, capture_output=True
     )
-    print("[⚙️] Transcribing with Whisper large-v3...")
-    w_segments_raw, _ = w_model.transcribe(
-        temp_audio,
-        word_timestamps=True,
-        vad_filter=True,
-        condition_on_previous_text=False
-    )
-    
+    print("[⚙️] Transcribing with Whisper...")
+    result = model.transcribe(temp_audio, word_timestamps=True, verbose=False)
+ 
     word_events = []
-    for seg in list(w_segments_raw):
-        for w in (seg.words or []):
-            if w.word.strip():
-                word_events.append({
-                    "word":  w.word.strip(),
-                    "start": w.start,
-                    "end":   w.end
-                })
-
+    for seg in result.get("segments", []):
+        for w in seg.get("words", []):
+            word_events.append({
+                "word":  w["word"].strip(),
+                "start": w["start"],
+                "end":   w["end"]
+            })
+ 
     # ── Video dimensions ───────────────────────────────────────
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -283,7 +276,7 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
     )
     info  = json.loads(probe.stdout)["streams"][0]
     W, H  = int(info["width"]), int(info["height"])
-
+ 
     # ── HARDCODED PREMIUM TEMPLATES ────────────────────────────
     def make_base_html(width: int, height: int) -> str:
         return f"""<!DOCTYPE html>
@@ -313,7 +306,7 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
   .highlight-align {{
     letter-spacing: -0.5px; align-self: flex-end;
   }}
-
+ 
   /* --- PRIMARY TEMPLATES (Base Text) --- */
   
   /* 1. Original Glass Silver */
@@ -343,9 +336,9 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
     background-image: linear-gradient(to bottom, #ffffff 0%, #e0f7fa 100%);
     filter: drop-shadow(0 0 10px rgba(0,255,255,0.4)) drop-shadow(0 2px 2px rgba(0,0,0,0.8));
   }}
-
+ 
   /* --- SECONDARY TEMPLATES (Highlight Words) --- */
-
+ 
   /* 1. Original Electric Teal */
   .s-electric-teal {{
     background-image: linear-gradient(to right, #00dcc8 0%, #00c3d2 50%, #00aadc 100%);
@@ -380,9 +373,9 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
   </div>
 </body>
 </html>"""
-
+ 
     print("[⚙️] Launching headless Chrome for caption rendering...")
-
+ 
     segments = []
     rendered_pairs = {}
     i = 0
@@ -390,7 +383,7 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
         w1 = word_events[i]["word"]
         t_s = word_events[i]["start"]
         w1_len = len(w1)
-
+ 
         if w1_len >= 9 or i + 1 >= len(word_events):
             w2 = None
             t_e = word_events[i]["end"]
@@ -405,47 +398,47 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
             else:
                 t_e = word_events[i + 1]["end"]
                 i += 2
-
+ 
         key = (w1, w2 or "")
         if key not in rendered_pairs:
             png_path = os.path.join(ovr_dir, f"cap_{len(rendered_pairs):04d}.png")
             rendered_pairs[key] = png_path
-
+ 
         segments.append((t_s, t_e, rendered_pairs[key], w1, w2))
-
+ 
     with sync_playwright() as p:
         browser = p.chromium.launch()
         context = browser.new_context(viewport={"width": W, "height": H}, device_scale_factor=1)
         page = context.new_page()
-
+ 
         page.set_content(make_base_html(W, H), wait_until="networkidle")
-
+ 
         rendered_done = set()
         for t_s, t_e, png_path, w1, w2 in segments:
             key = (w1, w2 or "")
             if key in rendered_done: continue
-
+ 
             w1_len = len(w1)
             combined_len = len(w1) + (len(w2) if w2 else 0)
-
+ 
             if w1_len <= 4: primary_size = int(H * 0.075)
             elif w1_len <= 6: primary_size = int(H * 0.065)
             elif w1_len <= 9: primary_size = int(H * 0.055)
             elif w1_len <= 12: primary_size = int(H * 0.047)
             else: primary_size = int(H * 0.038)
-
+ 
             secondary_size = int(primary_size * 0.52)
-
+ 
             if combined_len > 14:
                 shrink = max(0.65, 1.0 - (combined_len - 14) * 0.018)
                 primary_size = int(primary_size * shrink)
                 secondary_size = int(secondary_size * shrink)
-
+ 
             primary_size = max(primary_size, 18)
             secondary_size = max(secondary_size, 12)
             gap_px = int(primary_size * 0.15)
             padding_bottom_px = int(primary_size * 0.05)
-
+ 
             # Assign classes dynamically via Javascript
             page.evaluate("""
                 (args) => {
@@ -488,30 +481,30 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
                 "p_class": p_class,
                 "s_class": s_class
             })
-
+ 
             page.screenshot(path=png_path, full_page=False, omit_background=True)
             rendered_done.add(key)
-
+ 
         browser.close()
-
+ 
     # ── FFmpeg overlay — batched with Dynamic Mathematical Animations ──
     print("[⚙️] Compositing with cinematic motion math...")
-
+ 
     CHUNK = 50
     current_video = video_path
     
     # Extract animation preference from frontend
     anim_style = cap_options.get("captionAnimation", "spring-up")
     dur = 0.15 # 150ms base animation duration
-
+ 
     for chunk_start in range(0, len(segments), CHUNK):
         chunk = segments[chunk_start : chunk_start + CHUNK]
         chunk_out = os.path.join(base_dir, f"_chunk_{chunk_start:04d}.mp4")
-
+ 
         inputs = ["ffmpeg", "-i", current_video]
         for _, _, path, _, _ in chunk: 
             inputs += ["-i", path]
-
+ 
         filter_parts = []
         for idx, (t_s, t_e, _, _, _) in enumerate(chunk):
             in_lbl = f"[v{idx}]" if idx > 0 else "[0:v]"
@@ -547,9 +540,9 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
             else:
                 # Hard Cut (None)
                 overlay_cmd = f"x=0:y=0:{enable_expr}"
-
+ 
             filter_parts.append(f"{in_lbl}{inp_lbl}overlay={overlay_cmd}{out_lbl}")
-
+ 
         cmd = inputs + [
             "-filter_complex", ";".join(filter_parts),
             "-map", f"[v{len(chunk)}]", "-map", "0:a:0",
@@ -558,31 +551,31 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
         ]
         
         subprocess.run(cmd, check=True, capture_output=True)
-
+ 
         if current_video != video_path and os.path.exists(current_video):
             os.remove(current_video)
         current_video = chunk_out
-
+ 
     if current_video != video_path: 
         os.replace(current_video, output_vid)
     else: 
         shutil.copy(video_path, output_vid)
-
+ 
     shutil.rmtree(ovr_dir, ignore_errors=True)
     if os.path.exists(temp_audio): 
         os.remove(temp_audio)
-
+ 
     print(f"[✅] Perfect CSS captions burned with '{anim_style}' animation: {output_vid}")
     return output_vid
-
+ 
 def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> list:
     import google.generativeai as genai
     import time
     import json
     import os
-
+ 
     # Grab this from Google AI Studio (it's free)
-    api_key = api_key_opt or os.environ.get("GEMINI_API_KEY")
+    api_key = api_key_opt or "AIzaSyAeo8khvjWySFpQp4tVsMQnRLkB1bsFLz0"
     if not api_key or api_key == "YOUR_FREE_API_KEY":
         print("[⚠️] GEMINI_API_KEY not found in environment. Proceeding without forced alignment.")
         return []
@@ -600,10 +593,10 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
             time.sleep(2)
             audio_file = genai.get_file(audio_file.name)
         print("\n[✅] Audio processed by Gemini.")
-
+ 
         # 3. Use Gemini Flash Latest (Universal free tier fallback)
         model = genai.GenerativeModel('gemini-flash-latest')
-
+ 
         # 4. The strict prompt to prevent hallucination and force formatting
         prompt = """
         Listen to this audio. It is a mix of Sinhala and English (Singlish).
@@ -624,7 +617,7 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
         ]
         Do not include any markdown formatting. Just the raw JSON array.
         """
-
+ 
         print("[⚙️] Generating 99% accurate transcript...")
         response = model.generate_content([prompt, audio_file])
         
@@ -643,43 +636,39 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
         print(preview_text)
         print("="*50 + "\n")
         # --------------------------------------------------
-
+ 
         return word_list
     except Exception as e:
         print(f"[❌] Gemini API Error: {e}")
         return []
-
+ 
 def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list) -> list:
     """
-    Order-based alignment — maps Gemini phrases onto Whisper timing by SEQUENCE,
-    not by timestamp proximity. Gemini's timestamps are too inaccurate to trust
-    as anchors; only its TEXT and PHRASE ORDER are reliable.
-
+    Time-window alignment — does NOT count words at all.
+ 
     Strategy:
-      1. Divide the total Whisper timeline proportionally across Gemini phrases
-         based on character count (longer phrases get more time).
-      2. Within each phrase's allocated Whisper window, snap start/end to the
-         nearest actual Whisper word boundary so cuts land on real speech edges.
-      3. Enforce a minimum display duration so short phrases don't flicker.
+      1. Gemini gives us a rough time window per phrase (e.g. 1.0s–2.5s).
+         These timestamps drift but the *order* is reliable.
+      2. Whisper gives us accurate per-word timestamps but wrong Sinhala text.
+      3. For each Gemini phrase we:
+           a) Find the Whisper word whose start time is closest to Gemini's
+              start — that becomes our actual_start.
+           b) The actual_end is taken from the Whisper word that sits just
+              before the *next* phrase's start (i.e. we use the gap between
+              phrases as the natural cut point).
+      4. A small minimum display duration (MIN_DUR) prevents flicker on
+         very short phrases.
     """
-    MIN_DUR = 0.40
-
-    phrases = [p for p in gemini_phrases if p.get("phrase", "").strip()]
-    if not phrases:
-        return []
-
+    MIN_DUR = 0.40  # seconds — captions show for at least this long
+ 
     if not whisper_words:
-        # Fallback: distribute Gemini timestamps evenly
-        return [{"phrase": p["phrase"], "start": p["start"], "end": p["end"]}
-                for p in phrases]
-
-    total_chars = sum(len(p["phrase"]) for p in phrases)
-    total_duration = whisper_words[-1]["end"] - whisper_words[0]["start"]
-    timeline_start = whisper_words[0]["start"]
-
+        return [{"phrase": p.get("phrase",""), "start": p["start"], "end": p["end"]}
+                for p in gemini_phrases if p.get("phrase","").strip()]
+ 
+    # Build a flat list of all Whisper start times for fast binary search
     whisper_starts = [w["start"] for w in whisper_words]
-
-    def snap_to_word(t: float) -> int:
+ 
+    def nearest_whisper_idx(t: float) -> int:
         """Return index of the Whisper word whose start is closest to t."""
         import bisect
         pos = bisect.bisect_left(whisper_starts, t)
@@ -687,67 +676,68 @@ def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list) -> list:
             return 0
         if pos >= len(whisper_starts):
             return len(whisper_starts) - 1
+        # Pick whichever neighbour is closer
         before = pos - 1
         if abs(whisper_starts[before] - t) <= abs(whisper_starts[pos] - t):
             return before
         return pos
-
-    # Build proportional time windows for each phrase
-    windows = []
-    cursor = timeline_start
-    for p in phrases:
-        weight = len(p["phrase"]) / total_chars if total_chars > 0 else 1 / len(phrases)
-        duration = total_duration * weight
-        windows.append((cursor, cursor + duration))
-        cursor += duration
-
+ 
     aligned = []
-    for i, (phrase_item, (win_start, win_end)) in enumerate(zip(phrases, windows)):
-        phrase = phrase_item["phrase"].strip()
-
-        # Snap window start to nearest Whisper word
-        start_idx = snap_to_word(win_start)
-        actual_start = whisper_words[start_idx]["start"]
-
-        # Snap window end: use the word just before the NEXT window starts
-        if i + 1 < len(windows):
-            next_win_start = windows[i + 1][0]
-            next_idx = snap_to_word(next_win_start)
-            # Step back one word to avoid bleeding into the next phrase
-            end_idx = max(start_idx, next_idx - 1)
-            actual_end = whisper_words[end_idx]["end"]
+    phrases = [p for p in gemini_phrases if p.get("phrase","").strip()]
+ 
+    for i, item in enumerate(phrases):
+        phrase = item["phrase"].strip()
+        g_start = float(item.get("start", 0))
+        g_end   = float(item.get("end",   g_start + 1.0))
+ 
+        # ── actual_start: nearest Whisper word to Gemini's start ──────
+        snap_idx = nearest_whisper_idx(g_start)
+        actual_start = whisper_words[snap_idx]["start"]
+ 
+        # ── actual_end: use the Whisper word just before next phrase ──
+        # Look at where the NEXT Gemini phrase starts and find the last
+        # Whisper word that ends before that point. This fills the full
+        # duration of the phrase without over-running into the next one.
+        if i + 1 < len(phrases):
+            next_g_start = float(phrases[i + 1].get("start", g_end))
+            # Find the last Whisper word that starts before next_g_start
+            next_snap_idx = nearest_whisper_idx(next_g_start)
+            # Step back one word so we don't bleed into the next phrase
+            end_word_idx = max(snap_idx, next_snap_idx - 1)
+            actual_end = whisper_words[end_word_idx]["end"]
         else:
-            # Last phrase — run to the end of Whisper's timeline
-            actual_end = whisper_words[-1]["end"]
-
-        # Enforce minimum display duration
+            # Last phrase — use Gemini's end time (nothing after it)
+            # but also clamp against the last Whisper word
+            actual_end = max(g_end, whisper_words[-1]["end"])
+ 
+        # ── enforce minimum display duration ──────────────────────────
         if actual_end - actual_start < MIN_DUR:
             actual_end = actual_start + MIN_DUR
-
-        # Never go backwards
+ 
+        # ── sanity: never go backwards ────────────────────────────────
         if aligned and actual_start < aligned[-1]["end"]:
             actual_start = aligned[-1]["end"]
             if actual_end - actual_start < MIN_DUR:
                 actual_end = actual_start + MIN_DUR
-
+ 
         aligned.append({"phrase": phrase, "start": actual_start, "end": actual_end})
-
+ 
         print(f"    [{i+1:02d}] {phrase[:35]:<35}  "
-              f"window={win_start:.2f}-{win_end:.2f}s  →  "
+              f"gemini={g_start:.2f}-{g_end:.2f}s  →  "
               f"snapped={actual_start:.2f}-{actual_end:.2f}s")
-
+ 
     return aligned
-
-
+ 
+ 
 def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     import json, shutil, subprocess, os
     from playwright.sync_api import sync_playwright
-
+ 
     base_dir   = os.path.dirname(os.path.abspath(video_path))
     output_vid = os.path.splitext(video_path)[0] + "_si_captioned.mp4"
     ovr_dir    = os.path.join(base_dir, "_cap_overlays_si")
     os.makedirs(ovr_dir, exist_ok=True)
-
+ 
     p_class = cap_options.get("captionPrimaryStyle", "p-glass-silver")
     
     # 1. Extract Audio
@@ -761,44 +751,55 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
         print("[❌] FATAL: Gemini failed. Cannot render captions.")
         if os.path.exists(temp_audio): os.remove(temp_audio)
         return video_path
-
+ 
     print(f"[⚙️] Extracted {len(gemini_phrases)} Singlish phrases from Gemini.")
-
+ 
     # ── STEP 2: Whisper for accurate word-level timestamps ────────────
     print("[⚙️] Running Whisper (base) for frame-accurate timestamps...")
     try:
         from faster_whisper import WhisperModel
+        import importlib.util
+        if os.name == 'nt':
+            for pkg in ["nvidia.cublas", "nvidia.cudnn"]:
+                spec = importlib.util.find_spec(pkg)
+                if spec and spec.submodule_search_locations:
+                    bin_path = os.path.join(spec.submodule_search_locations[0], "bin")
+                    if os.path.exists(bin_path):
+                        os.environ["PATH"] = bin_path + os.pathsep + os.environ.get("PATH", "")
         try:
             w_model = WhisperModel("base", device="cuda", compute_type="int8")
         except Exception:
             w_model = WhisperModel("base", device="cpu", compute_type="int8")
-
+ 
+        # NO language= param — language-agnostic mode gives far more reliable
+        # word-boundary timestamps on Sinhala/mixed audio. We only use the
+        # timestamps; the text content is irrelevant and thrown away.
         w_segments_raw, _ = w_model.transcribe(
             temp_audio,
             word_timestamps=True,
-            vad_filter=True,
-            condition_on_previous_text=False,
-            beam_size=1,                # Fastest — we only need timestamps, not text accuracy
-            no_speech_threshold=0.3,    # More aggressive speech detection on mixed audio
+            vad_filter=True,              # trims silence → tighter boundaries
+            condition_on_previous_text=False
         )
+        # faster-whisper returns a generator — consume it once into a list
         w_segments_list = list(w_segments_raw)
         whisper_words = []
         for seg in w_segments_list:
             for w in (seg.words or []):
                 if w.word.strip():
                     whisper_words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
-
-        # Fallback to segment boundaries if word timestamps are too sparse
+ 
+        # If word-level timestamps are too sparse (common on non-Latin audio),
+        # fall back to segment-level boundaries which are always rock-solid
         if len(whisper_words) < len(gemini_phrases):
             print(f"[⚠️] Only {len(whisper_words)} word anchors for {len(gemini_phrases)} phrases — using segment boundaries.")
             whisper_words = [{"word": "[seg]", "start": seg.start, "end": seg.end}
                              for seg in w_segments_list]
-
+ 
         print(f"[⚙️] Whisper found {len(whisper_words)} timestamp anchors.")
     except Exception as e:
         print(f"[⚠️] Whisper timing failed ({e}). Falling back to Gemini timestamps.")
         whisper_words = []
-
+ 
     # ── STEP 3: Snap Gemini phrases onto Whisper timing ──────────────
     if whisper_words:
         segments_data = align_phrases_to_whisper(gemini_phrases, whisper_words)
@@ -807,13 +808,13 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
         # Graceful fallback — use Gemini timestamps with a small static offset
         print("[⚠️] Using Gemini timestamps with +0.10s offset as fallback.")
         segments_data = [{"phrase": p["phrase"], "start": p["start"] + 0.10, "end": p["end"] + 0.10} for p in gemini_phrases]
-
+ 
     # 3. Video dimensions
     probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", video_path], capture_output=True, text=True)
     info_json = json.loads(probe.stdout)["streams"][0]
     W, H  = int(info_json["width"]), int(info_json["height"])
-
-
+ 
+ 
     def make_base_html(width: int, height: int) -> str:
         return f"""<!DOCTYPE html>
 <html>
@@ -836,21 +837,21 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     background-clip: text; color: transparent;
   }}
-
+ 
   /* STYLE 1: SINHALA */
   .sin-blue {{
     font-family: 'Gemunu Libre', sans-serif; font-weight: 800;
     background-image: linear-gradient(to bottom, #82cfff 0%, #0077ff 100%);
     filter: drop-shadow(0 0 12px rgba(0, 100, 255, 0.9)) drop-shadow(0 3px 5px rgba(0,0,0,0.9));
   }}
-
+ 
   /* STYLE 2: ENGLISH */
   .eng-silver {{
     font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -0.5px;
     background-image: linear-gradient(160deg, #ffffff 0%, #d2e8ff 30%, #b4d7ff 60%, #ffffff 100%);
     filter: drop-shadow(0 0 10px rgba(140,185,255,0.5)) drop-shadow(0 2px 4px rgba(0,0,0,0.8));
   }}
-
+ 
   /* STYLE 3: NUMBERS */
   .num-gold {{
     font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -1px;
@@ -865,7 +866,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
   </div>
 </body>
 </html>"""
-
+ 
     segments_arr = []
     
     with sync_playwright() as p:
@@ -873,7 +874,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
         context = browser.new_context(viewport={"width": W, "height": H}, device_scale_factor=1)
         page = context.new_page()
         page.set_content(make_base_html(W, H), wait_until="networkidle")
-
+ 
         for i, item in enumerate(segments_data):
             phrase_text = str(item.get("phrase", "")).strip()
             if not phrase_text: continue
@@ -888,7 +889,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
             if char_count <= 15: font_size = int(H * 0.055)
             elif char_count <= 25: font_size = int(H * 0.045)
             else: font_size = int(H * 0.038)
-
+ 
             # THE PRO STACKED JS PARSER
             page.evaluate("""
                 (args) => {
@@ -899,11 +900,11 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                     
                     // Find the exact middle of the phrase to insert the line break
                     const midPoint = Math.ceil(words.length / 2);
-
+ 
                     words.forEach((word, index) => {
                         let className = '';
                         let size = args.fontSize;
-
+ 
                         if (/\\d+/.test(word)) {
                             className = 'num-gold';
                         } else if (/[A-Za-z]/.test(word)) {
@@ -912,7 +913,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                             className = 'sin-blue';
                             size += 5; 
                         }
-
+ 
                         innerHtml += `<span class="phrase-cap ${className}" style="font-size: ${size}px;">${word}</span>`;
                         
                         // Insert a line break if the phrase is 3+ words and we hit the middle
@@ -920,32 +921,32 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                             innerHtml += '<br>';
                         }
                     });
-
+ 
                     el.innerHTML = innerHtml;
                 }
             """, {"text": phrase_text, "fontSize": font_size})
-
+ 
             page.screenshot(path=png_path, full_page=False, omit_background=True)
             segments_arr.append((start_time, end_time, png_path, phrase_text, None))
-
+ 
         browser.close()
-
+ 
     # ── FFmpeg overlay — batched with Dynamic Mathematical Animations ──
     print("[⚙️] Compositing Sinhala captions with cinematic motion math...")
-
+ 
     CHUNK = 50
     current_video = video_path
     anim_style = cap_options.get("captionAnimation", "spring-up")
     dur = 0.15 
-
+ 
     for chunk_start in range(0, len(segments_arr), CHUNK):
         chunk = segments_arr[chunk_start : chunk_start + CHUNK]
         chunk_out = os.path.join(base_dir, f"_chunk_{chunk_start:04d}.mp4")
-
+ 
         inputs = ["ffmpeg", "-i", current_video]
         for _, _, path, _, _ in chunk: 
             inputs += ["-i", path]
-
+ 
         filter_parts = []
         for idx, (t_s, t_e, _, _, _) in enumerate(chunk):
             in_lbl = f"[v{idx}]" if idx > 0 else "[0:v]"
@@ -974,9 +975,9 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                 
             else:
                 overlay_cmd = f"x=0:y=0:{enable_expr}"
-
+ 
             filter_parts.append(f"{in_lbl}{inp_lbl}overlay={overlay_cmd}{out_lbl}")
-
+ 
         cmd = inputs + [
             "-filter_complex", ";".join(filter_parts),
             "-map", f"[v{len(chunk)}]", "-map", "0:a:0",
@@ -985,20 +986,20 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
         ]
         
         subprocess.run(cmd, check=True, capture_output=True)
-
+ 
         if current_video != video_path and os.path.exists(current_video):
             os.remove(current_video)
         current_video = chunk_out
-
+ 
     if current_video != video_path: 
         os.replace(current_video, output_vid)
     else: 
         shutil.copy(video_path, output_vid)
-
+ 
     shutil.rmtree(ovr_dir, ignore_errors=True)
     if os.path.exists(temp_audio): 
         os.remove(temp_audio)
-
+ 
     print(f"[✅] Perfect Sinhala CSS captions burned with '{anim_style}' animation: {output_vid}")
     return output_vid
 
@@ -1468,21 +1469,22 @@ def export_captions_overlay_en(video_path: str, options: dict) -> str:
             rendered_done.add(key)
         browser.close()
 
-    # ── Composite captions in CHUNKS of 40 (stays under FFmpeg's input file limit) ──
-    print("[⚙️] [OVERLAY EXPORT] Compositing onto transparent QuickTime canvas...")
+    # ── Composite captions in CHUNKS of 40 ──
+    print("[⚙️] [OVERLAY EXPORT] Compositing onto Green Screen MP4...")
     dur   = 0.15
     CHUNK = 40  
 
     def _build_overlay_filter(chunk, anim_style, dur):
-        parts = ["[0:v]format=rgba[rgba_base]"]
+        parts = []
         for idx, (t_s, t_e, _, _, _) in enumerate(chunk):
-            in_lbl  = "[rgba_base]" if idx == 0 else f"[v{idx}]"
+            in_lbl  = "[0:v]" if idx == 0 else f"[v{idx}]"
             out_lbl = f"[v{idx+1}]"
             inp_lbl = f"[{idx+1}]"
             enable_expr    = f"enable='between(t,{t_s:.3f},{t_e:.3f})'"
             t_prog         = f"(t-{t_s:.3f})/{dur}"
             inv_p          = f"(1-{t_prog})"
             ease_out_cubic = f"({inv_p}*{inv_p}*{inv_p})"
+            
             if anim_style == "slide-up":
                 y_expr      = f"if(lte(t,{t_s:.3f}+{dur}), 60*{ease_out_cubic}, 0)"
                 overlay_cmd = f"x=0:y='{y_expr}':{enable_expr}"
@@ -1497,52 +1499,44 @@ def export_captions_overlay_en(video_path: str, options: dict) -> str:
             else:
                 overlay_cmd = f"x=0:y=0:{enable_expr}"
                 
-            # FORCE RGB OVERLAY TO PRESERVE ALPHA
+            # FIXED: Removed eof_action=pass. FFmpeg will now hold the image correctly.
             parts.append(
-                f"{in_lbl}{inp_lbl}overlay={overlay_cmd}:format=rgb:eof_action=pass{out_lbl}"
+                f"{in_lbl}{inp_lbl}overlay={overlay_cmd}{out_lbl}"
             )
         return parts
 
     current_base = None
     chunk_files  = []
-    output_vid = os.path.splitext(video_path)[0] + "_captions_overlay_en.mov"
+    output_vid = os.path.splitext(video_path)[0] + "_captions_overlay_en.mp4"
 
     for chunk_start in range(0, len(segments), CHUNK):
         chunk     = segments[chunk_start: chunk_start + CHUNK]
-        chunk_out = os.path.join(base_dir, f"_ovr_en_chunk_{chunk_start:04d}.mov")
+        chunk_out = os.path.join(base_dir, f"_ovr_en_chunk_{chunk_start:04d}.mp4")
         chunk_files.append(chunk_out)
 
         if current_base is None:
-            # Force RGBA directly on the lavfi generation to guarantee a transparent background
+            # Generate pure Green Screen base
             inputs_cmd = [
-                "ffmpeg",
-                "-f", "lavfi", "-i",
-                f"color=c=black@0.0:size={W}x{H}:rate={fps}:duration={duration},format=rgba"
+                "ffmpeg", "-f", "lavfi", "-i",
+                f"color=c=green:size={W}x{H}:rate={fps}:duration={duration}"
             ]
         else:
-            # Tell FFmpeg to decode the previous chunk preserving alpha
-            inputs_cmd = ["ffmpeg", "-vcodec", "qtrle", "-i", current_base]
+            inputs_cmd = ["ffmpeg", "-i", current_base]
 
         for _, _, path, _, _ in chunk:
             inputs_cmd += ["-i", path]
 
         filter_parts = _build_overlay_filter(chunk, anim_style, dur)
 
-        # Final output forced to RGBA, encoded using QuickTime Animation (qtrle) + argb
+        # Standard compressed MP4 output
         cmd = inputs_cmd + [
-            "-filter_complex", ";".join(filter_parts) + f";[v{len(chunk)}]format=rgba[final_out]",
-            "-map", "[final_out]",
-            "-c:v", "qtrle", 
-            "-pix_fmt", "argb",
+            "-filter_complex", ";".join(filter_parts),
+            "-map", f"[v{len(chunk)}]",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18", 
+            "-pix_fmt", "yuv420p",
             chunk_out, "-y"
         ]
-        try:
-            subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError as e:
-            err = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
-            print(f"[\u274c] FFmpeg chunk {chunk_start} failed:\n{err[-800:]}")
-            raise
-
+        subprocess.run(cmd, check=True, capture_output=True)
         current_base = chunk_out
 
     os.replace(current_base, output_vid)
@@ -1552,8 +1546,8 @@ def export_captions_overlay_en(video_path: str, options: dict) -> str:
     shutil.rmtree(ovr_dir, ignore_errors=True)
     if os.path.exists(temp_audio): os.remove(temp_audio)
 
-    print(f"[✅] [OVERLAY EXPORT] CapCut overlay saved: {output_vid}")
-    print(f"[📋] Drag '{os.path.basename(output_vid)}' onto your CapCut timeline above your footage.")
+    print(f"[✅] [OVERLAY EXPORT] Green Screen overlay saved: {output_vid}")
+    print(f"[📋] Import into CapCut and use 'Remove BG -> Chroma Key -> Pick Green'.")
     return output_vid
 
 
@@ -1603,9 +1597,9 @@ def export_captions_overlay_si(video_path: str, options: dict) -> str:
             w_model = WhisperModel("base", device="cpu",  compute_type="int8")
         w_segs_raw, _ = w_model.transcribe(
             temp_audio, word_timestamps=True,
-            vad_filter=True, condition_on_previous_text=False,
-            beam_size=1,                # Fastest — we only need timestamps, not text accuracy
-            no_speech_threshold=0.3,    # More aggressive speech detection on mixed audio
+            vad_filter=False,               # ← CRITICAL: vad_filter kills Sinhala audio
+            condition_on_previous_text=False,
+            language="si",                  # ← Force Sinhala so it doesn't bail out
         )
         w_segs_list  = list(w_segs_raw)
         whisper_words = []
@@ -1613,8 +1607,8 @@ def export_captions_overlay_si(video_path: str, options: dict) -> str:
             for w in (seg.words or []):
                 if w.word.strip():
                     whisper_words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
-        if len(whisper_words) < len(gemini_phrases):
-            print(f"[⚠️] Only {len(whisper_words)} word anchors for {len(gemini_phrases)} phrases — using segment boundaries.")
+        if len(whisper_words) < len(gemini_phrases) // 2:
+            print(f"[⚠️] Sparse word timestamps ({len(whisper_words)}) — using segment boundaries.")
             whisper_words = [{"word": "[seg]", "start": seg.start, "end": seg.end}
                              for seg in w_segs_list]
         print(f"[⚙️] Whisper found {len(whisper_words)} timestamp anchors.")
@@ -1694,20 +1688,21 @@ def export_captions_overlay_si(video_path: str, options: dict) -> str:
         browser.close()
 
     # ── Composite Sinhala captions in CHUNKS of 40 ──
-    print("[⚙️] [OVERLAY EXPORT] Compositing Sinhala captions onto transparent QuickTime canvas...")
+    print("[⚙️] [OVERLAY EXPORT] Compositing Sinhala captions onto Green Screen MP4...")
     dur   = 0.15
     CHUNK = 40
 
     def _build_si_filter(chunk, anim_style, dur):
-        parts = ["[0:v]format=rgba[rgba_base]"]
+        parts = []
         for idx, (t_s, t_e, _, _, _) in enumerate(chunk):
-            in_lbl  = "[rgba_base]" if idx == 0 else f"[v{idx}]"
+            in_lbl  = "[0:v]" if idx == 0 else f"[v{idx}]"
             out_lbl = f"[v{idx+1}]"
             inp_lbl = f"[{idx+1}]"
             enable_expr    = f"enable='between(t,{t_s:.3f},{t_e:.3f})'"
             t_prog         = f"(t-{t_s:.3f})/{dur}"
             inv_p          = f"(1-{t_prog})"
             ease_out_cubic = f"({inv_p}*{inv_p}*{inv_p})"
+            
             if anim_style == "slide-up":
                 y_expr      = f"if(lte(t,{t_s:.3f}+{dur}), 60*{ease_out_cubic}, 0)"
                 overlay_cmd = f"x=0:y='{y_expr}':{enable_expr}"
@@ -1722,52 +1717,43 @@ def export_captions_overlay_si(video_path: str, options: dict) -> str:
             else:
                 overlay_cmd = f"x=0:y=0:{enable_expr}"
                 
-            # FORCE RGB OVERLAY TO PRESERVE ALPHA
+            # FIXED: Removed eof_action=pass
             parts.append(
-                f"{in_lbl}{inp_lbl}overlay={overlay_cmd}:format=rgb:eof_action=pass{out_lbl}"
+                f"{in_lbl}{inp_lbl}overlay={overlay_cmd}{out_lbl}"
             )
         return parts
 
     current_base = None
     chunk_files  = []
-    output_vid = os.path.splitext(video_path)[0] + "_captions_overlay_si.mov"
+    output_vid = os.path.splitext(video_path)[0] + "_captions_overlay_si.mp4"
 
     for chunk_start in range(0, len(segments_arr), CHUNK):
         chunk     = segments_arr[chunk_start: chunk_start + CHUNK]
-        chunk_out = os.path.join(base_dir, f"_ovr_si_chunk_{chunk_start:04d}.mov")
+        chunk_out = os.path.join(base_dir, f"_ovr_si_chunk_{chunk_start:04d}.mp4")
         chunk_files.append(chunk_out)
 
         if current_base is None:
-            # Force RGBA directly on the lavfi generation
+            # Generate pure Green Screen base
             inputs_cmd = [
-                "ffmpeg",
-                "-f", "lavfi", "-i",
-                f"color=c=black@0.0:size={W}x{H}:rate={fps}:duration={duration},format=rgba"
+                "ffmpeg", "-f", "lavfi", "-i",
+                f"color=c=green:size={W}x{H}:rate={fps}:duration={duration}"
             ]
         else:
-            # Tell FFmpeg to decode the previous chunk preserving alpha
-            inputs_cmd = ["ffmpeg", "-vcodec", "qtrle", "-i", current_base]
+            inputs_cmd = ["ffmpeg", "-i", current_base]
 
         for _, _, path, _, _ in chunk:
             inputs_cmd += ["-i", path]
 
         filter_parts = _build_si_filter(chunk, anim_style, dur)
 
-        # Final output forced to RGBA, encoded using QuickTime Animation (qtrle) + argb
         cmd = inputs_cmd + [
-            "-filter_complex", ";".join(filter_parts) + f";[v{len(chunk)}]format=rgba[final_out]",
-            "-map", "[final_out]",
-            "-c:v", "qtrle", 
-            "-pix_fmt", "argb",
+            "-filter_complex", ";".join(filter_parts),
+            "-map", f"[v{len(chunk)}]",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18", 
+            "-pix_fmt", "yuv420p",
             chunk_out, "-y"
         ]
-        try:
-            subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError as e:
-            err = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
-            print(f"[\u274c] FFmpeg SI chunk {chunk_start} failed:\n{err[-800:]}")
-            raise
-
+        subprocess.run(cmd, check=True, capture_output=True)
         current_base = chunk_out
 
     os.replace(current_base, output_vid)
@@ -1777,8 +1763,8 @@ def export_captions_overlay_si(video_path: str, options: dict) -> str:
     shutil.rmtree(ovr_dir, ignore_errors=True)
     if os.path.exists(temp_audio): os.remove(temp_audio)
 
-    print(f"[✅] [OVERLAY EXPORT] CapCut overlay saved: {output_vid}")
-    print(f"[📋] Drag '{os.path.basename(output_vid)}' onto your CapCut timeline above your footage.")
+    print(f"[✅] [OVERLAY EXPORT] Green Screen overlay saved: {output_vid}")
+    print(f"[📋] Import into CapCut and use 'Remove BG -> Chroma Key -> Pick Green'.")
     return output_vid
 
 

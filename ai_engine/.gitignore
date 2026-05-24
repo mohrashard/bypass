@@ -1,0 +1,62 @@
+# Environment Variables
+.env
+.env.local
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Temporary & Working Files
+_*
+*.wav
+*.mp4
+*.mov
+*.webm
+*.png
+*.jpg
+*.jpeg
+!assets/
+!templates/
+
+# CapCut Temporary Output Files
+_silence_detect.wav
+_concat_list.txt
+_chopped.mp4
+_tmp_raw.wav
+_tmp_ai.wav
+_studio.mp4
+_graded.mp4
+_whisper_audio.wav
+_captioned.mp4
+_cap_overlays/
+_chunk_*.mp4
+_gemini_audio.wav
+_si_captioned.mp4
+_cap_overlays_si/
+_bottom_glow.png
+_glow.mp4
+_temp_bg_fx.mp4
+_bgfx.mp4
+_temp_audio.wav
+_ovr_en_audio.wav
+_cap_ovr_en/
+_ovr_si_audio.wav
+_cap_ovr_si/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS Files
+.DS_Store
+Thumbs.db
