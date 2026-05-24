@@ -13,23 +13,23 @@ function isNoisyLine(line: string): boolean {
 }
 
 const OPTIONS_META: Record<string, string> = {
-  removeSilence:   '✂️ Remove Dead Air',
-  burnCaptions:    '📝 Burn Viral Captions',
-  studioAudio:     '🎙️ Studio Audio Enhancer',
-  blurBackground:  '🌫️ AI Background FX',
-  autoZoom:        '🧠 Semantic Smart-Zooms',
-  makeVertical:    '📱 Face-Tracking Vertical',
-  cinematicColor:  '🎨 Cinematic Color Grade',
-  bottomGlow:      '🌌 Cinematic Bottom Glow',
+  removeSilence: '✂️ Remove Dead Air',
+  burnCaptions: '📝 Burn Viral Captions',
+  studioAudio: '🎙️ Studio Audio Enhancer',
+  blurBackground: '🌫️ AI Background FX',
+  autoZoom: '🧠 Semantic Smart-Zooms',
+  makeVertical: '📱 Face-Tracking Vertical',
+  cinematicColor: '🎨 Cinematic Color Grade',
+  bottomGlow: '🌌 Cinematic Bottom Glow',
 };
 
 export default function App() {
-  const [activeTab, setActiveTab]             = useState<'utility' | 'nexus'>('utility');
+  const [activeTab, setActiveTab] = useState<'utility' | 'nexus'>('utility');
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
-  const [isProcessing, setIsProcessing]       = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [isExportingOverlay, setIsExportingOverlay] = useState(false);
-  const [terminalLines, setTerminalLines]     = useState<string[]>([]);
+  const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
   const [options, setOptions] = useState({
@@ -48,6 +48,12 @@ export default function App() {
     captionFont: 'Montserrat',
     captionPrimaryStyle: 'p-clean-white',
     captionSecondaryStyle: 's-hormozi-yellow',
+
+    // ── NEW: Sinhala Template Defaults ──
+    siMainStyle: 'si-main-blue',
+    siPrimaryStyle: 'si-pri-silver',
+    siSecondaryStyle: 'si-sec-gold',
+
     captionAnimation: 'spring-up',
     captionLanguage: 'en',
     geminiApiKey: '',
@@ -59,7 +65,6 @@ export default function App() {
     keyingMode: 'ai',
     colorGradeStyle: 'pro-max',
 
-    // NEW — triggers the overlay export stage in run_pipeline
     exportCaptionOverlay: false,
     greenScreenOverlay: true,
   });
@@ -116,7 +121,6 @@ export default function App() {
     });
   };
 
-  // ── Main render pipeline ─────────────────────────────────────────────
   const handleRunPipeline = async () => {
     if (!selectedFilePath || isProcessing) return;
     setIsProcessing(true);
@@ -134,7 +138,6 @@ export default function App() {
     }
   };
 
-  // ── CapCut overlay export (standalone, doesn't burn onto footage) ────
   const handleExportOverlay = async () => {
     if (!selectedFilePath || isExportingOverlay || isProcessing) return;
     if (!options.burnCaptions) {
@@ -145,24 +148,22 @@ export default function App() {
     setTerminalLines((prev) => [...prev,
       '',
       '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-      `[📦] Starting CapCut overlay export (${options.captionLanguage === 'si' ? 'Sinhala' : 'English'})...`,
+    `[📦] Starting CapCut overlay export (${options.captionLanguage === 'si' ? 'Sinhala' : 'English'})...`,
     ]);
     try {
-      // Pass exportCaptionOverlay: true so run_pipeline triggers the overlay stage
       await invoke<string>('run_python_engine', {
         videoPath: selectedFilePath,
         processType: 'pipeline',
         optionsJson: JSON.stringify({
           ...options,
-          // Skip all other heavy stages — only run the overlay export
           removeSilence: false,
           studioAudio: false,
           autoZoom: false,
           cinematicColor: false,
           blurBackground: false,
           bottomGlow: false,
-          burnCaptions: false,        // don't burn onto footage
-          exportCaptionOverlay: true, // just export the transparent overlay
+          burnCaptions: false,
+          exportCaptionOverlay: true,
         }),
       });
     } catch (error) {
@@ -180,7 +181,6 @@ export default function App() {
   return (
     <main className="min-h-screen text-white font-sans flex flex-col bg-[#09090b]">
 
-      {/* Nav */}
       <nav className="border-b border-zinc-800 bg-zinc-950 px-4 py-3 flex justify-center gap-3">
         {([['utility', '⚙️ Utility Pipe', 'emerald'], ['nexus', '🧠 Nexus Studio', 'purple']] as const).map(
           ([tab, label, color]) => (
@@ -206,7 +206,6 @@ export default function App() {
                 <p className="text-zinc-400 text-sm">Zero timeline. 100% local processing.</p>
               </div>
 
-              {/* Drop zone */}
               <div onClick={handleSelectFile}
                 className={`border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer transition-colors ${selectedFilePath
                   ? 'border-emerald-500 bg-emerald-500/10'
@@ -226,7 +225,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* Options grid */}
               <div className="bg-zinc-900 rounded-xl p-5 border border-zinc-800">
                 <div className="flex items-center justify-between mb-4">
                   <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">Processing stages</p>
@@ -235,10 +233,9 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-3">
                   {Object.entries(OPTIONS_META).map(([key, label]) => (
                     <div key={key} className="flex flex-col gap-2">
-                      <div className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
-                        options[key as keyof typeof options]
-                          ? 'bg-emerald-950/50 border-emerald-700/50'
-                          : 'bg-zinc-950 border-zinc-800 hover:border-zinc-600'}`}>
+                      <div className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${options[key as keyof typeof options]
+                        ? 'bg-emerald-950/50 border-emerald-700/50'
+                        : 'bg-zinc-950 border-zinc-800 hover:border-zinc-600'}`}>
                         <label className="flex items-center gap-3 cursor-pointer flex-1">
                           <input type="checkbox"
                             checked={options[key as keyof typeof options] as boolean}
@@ -253,7 +250,6 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* ── Semantic Zoom sub-menu ── */}
                       {key === 'autoZoom' && options.autoZoom && (
                         <div className="flex flex-col gap-3 p-3 ml-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
                           <div className="text-xs text-zinc-500 italic pb-2 border-b border-zinc-800/50">
@@ -283,7 +279,6 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* ── Background FX sub-menu ── */}
                       {key === 'blurBackground' && options.blurBackground && (
                         <div className="flex flex-col gap-3 p-3 ml-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
                           <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/50">
@@ -317,10 +312,9 @@ export default function App() {
                             <div className="flex items-center justify-between">
                               <span className="text-xs text-zinc-400 font-medium">Background File</span>
                               <button onClick={handleSelectBgImage}
-                                className={`text-xs px-3 py-1.5 rounded border transition-colors max-w-[140px] truncate ${
-                                  options.bgImagePath
-                                    ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-400'
-                                    : 'bg-zinc-950 border-zinc-700 hover:border-zinc-500 text-zinc-300'}`}>
+                                className={`text-xs px-3 py-1.5 rounded border transition-colors max-w-[140px] truncate ${options.bgImagePath
+                                  ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-400'
+                                  : 'bg-zinc-950 border-zinc-700 hover:border-zinc-500 text-zinc-300'}`}>
                                 {options.bgImageName || 'Choose Image...'}
                               </button>
                             </div>
@@ -328,11 +322,9 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* ── Captions sub-menu ── */}
                       {key === 'burnCaptions' && options.burnCaptions && (
                         <div className="flex flex-col gap-3 p-3 ml-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
 
-                          {/* Language selector */}
                           <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/50">
                             <span className="text-xs text-purple-400 font-semibold uppercase tracking-wider">Language Engine</span>
                             <select value={options.captionLanguage}
@@ -343,7 +335,6 @@ export default function App() {
                             </select>
                           </div>
 
-                          {/* Gemini API key (Sinhala only) */}
                           {options.captionLanguage === 'si' && (
                             <div className="flex flex-col gap-1 pb-2 mb-2 border-b border-zinc-800/50">
                               <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">Gemini API Key (Required)</span>
@@ -354,52 +345,94 @@ export default function App() {
                             </div>
                           )}
 
-                          {/* Font */}
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-zinc-400 font-medium">Typography</span>
-                            <select value={options.captionFont}
-                              onChange={(e) => setOptions((prev) => ({ ...prev, captionFont: e.target.value }))}
-                              className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500">
-                              <option value="Montserrat">Montserrat (Modern)</option>
-                              <option value="Anton">Anton (Bold/Blocky)</option>
-                              <option value="Poppins">Poppins (Clean)</option>
-                              <option value="Bangers">Bangers (Comic/Hype)</option>
-                              <option value="Oswald">Oswald (Condensed)</option>
-                            </select>
-                          </div>
-
-                          {/* Base style */}
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-zinc-400 font-medium">Base Style</span>
-                            <select value={options.captionPrimaryStyle}
-                              onChange={(e) => setOptions((prev) => ({ ...prev, captionPrimaryStyle: e.target.value }))}
-                              className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500">
-                              <option value="p-clean-white">1. Crisp Clean White</option>
-                              <option value="p-glass-silver">2. Glass Silver</option>
-                              <option value="p-heavy-stroke">3. Heavy Stroke Black</option>
-                              <option value="p-soft-yellow">4. Soft Pastel Yellow</option>
-                              <option value="p-neon-base">5. Neon Ambient White</option>
-                            </select>
-                          </div>
-
-                          {/* Highlight style (English only) */}
+                          {/* ── ENGLISH TEMPLATES ── */}
                           {options.captionLanguage === 'en' && (
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-zinc-400 font-medium">Highlight Style</span>
-                              <select value={options.captionSecondaryStyle}
-                                onChange={(e) => setOptions((prev) => ({ ...prev, captionSecondaryStyle: e.target.value }))}
-                                className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500">
-                                <option value="s-hormozi-yellow">1. Hormozi Bold Yellow</option>
-                                <option value="s-electric-teal">2. Electric Teal</option>
-                                <option value="s-crimson-red">3. Aggressive Crimson</option>
-                                <option value="s-cyber-purple">4. Cyberpunk Purple</option>
-                                <option value="s-luxury-gold">5. Luxury Metallic Gold</option>
-                                <option value="none">Disable Highlights</option>
-                              </select>
-                            </div>
+                            <>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-zinc-400 font-medium">Typography</span>
+                                <select value={options.captionFont}
+                                  onChange={(e) => setOptions((prev) => ({ ...prev, captionFont: e.target.value }))}
+                                  className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500">
+                                  <option value="Montserrat">Montserrat (Modern)</option>
+                                  <option value="Anton">Anton (Bold/Blocky)</option>
+                                  <option value="Poppins">Poppins (Clean)</option>
+                                  <option value="Bangers">Bangers (Comic/Hype)</option>
+                                  <option value="Oswald">Oswald (Condensed)</option>
+                                </select>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-zinc-400 font-medium">Base Style</span>
+                                <select value={options.captionPrimaryStyle}
+                                  onChange={(e) => setOptions((prev) => ({ ...prev, captionPrimaryStyle: e.target.value }))}
+                                  className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500">
+                                  <option value="p-clean-white">1. Crisp Clean White</option>
+                                  <option value="p-glass-silver">2. Glass Silver</option>
+                                  <option value="p-heavy-stroke">3. Heavy Stroke Black</option>
+                                  <option value="p-soft-yellow">4. Soft Pastel Yellow</option>
+                                  <option value="p-neon-base">5. Neon Ambient White</option>
+                                </select>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-zinc-400 font-medium">Highlight Style</span>
+                                <select value={options.captionSecondaryStyle}
+                                  onChange={(e) => setOptions((prev) => ({ ...prev, captionSecondaryStyle: e.target.value }))}
+                                  className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500">
+                                  <option value="s-hormozi-yellow">1. Hormozi Bold Yellow</option>
+                                  <option value="s-electric-teal">2. Electric Teal</option>
+                                  <option value="s-crimson-red">3. Aggressive Crimson</option>
+                                  <option value="s-cyber-purple">4. Cyberpunk Purple</option>
+                                  <option value="s-luxury-gold">5. Luxury Metallic Gold</option>
+                                  <option value="none">Disable Highlights</option>
+                                </select>
+                              </div>
+                            </>
                           )}
 
-                          {/* Animation */}
+                          {/* ── SINHALA TEMPLATES ── */}
+                          {options.captionLanguage === 'si' && (
+                            <>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-zinc-400 font-medium">Main (Sinhala)</span>
+                                <select value={options.siMainStyle}
+                                  onChange={(e) => setOptions((prev) => ({ ...prev, siMainStyle: e.target.value }))}
+                                  className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500 max-w-[140px]">
+                                  <option value="si-main-blue">1. Dynamic Blue Glow</option>
+                                  <option value="si-main-emerald">2. Professional Emerald</option>
+                                  <option value="si-main-crimson">3. Deep Crimson Impact</option>
+                                  <option value="si-main-amber">4. Warm Storyteller Amber</option>
+                                  <option value="si-main-purple">5. Cyberpunk Purple</option>
+                                  <option value="si-main-white">6. Clean White Shadow</option>
+                                </select>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-zinc-400 font-medium">Primary (Eng)</span>
+                                <select value={options.siPrimaryStyle}
+                                  onChange={(e) => setOptions((prev) => ({ ...prev, siPrimaryStyle: e.target.value }))}
+                                  className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500 max-w-[140px]">
+                                  <option value="si-pri-silver">1. Glass Silver Glow</option>
+                                  <option value="si-pri-gold">2. Subtle Luxury Gold</option>
+                                  <option value="si-pri-cyan">3. Electric Cyan High</option>
+                                  <option value="si-pri-magenta">4. Sharp Magenta Pop</option>
+                                  <option value="si-pri-slate">5. Modern Dark Slate</option>
+                                  <option value="si-pri-neon-green">6. High-Vis Neon Green</option>
+                                </select>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-zinc-400 font-medium">Secondary (#)</span>
+                                <select value={options.siSecondaryStyle}
+                                  onChange={(e) => setOptions((prev) => ({ ...prev, siSecondaryStyle: e.target.value }))}
+                                  className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500 max-w-[140px]">
+                                  <option value="si-sec-gold">1. Hormozi Bold Yellow</option>
+                                  <option value="si-sec-red">2. Alert Urgent Red</option>
+                                  <option value="si-sec-lime">3. Positive Lime Green</option>
+                                  <option value="si-sec-pink">4. High-Contrast Pink</option>
+                                  <option value="si-sec-aqua">5. Deep Aqua Blue</option>
+                                  <option value="si-sec-white">6. Pure Glowing White</option>
+                                </select>
+                              </div>
+                            </>
+                          )}
+
                           <div className="flex items-center justify-between border-t border-zinc-800/50 pt-2 mt-1">
                             <span className="text-xs text-emerald-400 font-semibold uppercase tracking-wider">Motion In</span>
                             <select value={options.captionAnimation}
@@ -412,12 +445,10 @@ export default function App() {
                             </select>
                           </div>
 
-                          {/* ── CapCut OVERLAY EXPORT BUTTON ─────────────────── */}
                           <div className="border-t border-zinc-800/50 pt-3 mt-1 flex flex-col gap-2">
                             <label className="flex items-center gap-2 cursor-pointer mb-1 group">
-                              <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                                options.greenScreenOverlay ? 'bg-emerald-500 border-emerald-500' : 'bg-zinc-900 border-zinc-700 group-hover:border-zinc-500'
-                              }`}>
+                              <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${options.greenScreenOverlay ? 'bg-emerald-500 border-emerald-500' : 'bg-zinc-900 border-zinc-700 group-hover:border-zinc-500'
+                                }`}>
                                 {options.greenScreenOverlay && <span className="text-white text-[10px]">✓</span>}
                               </div>
                               <span className="text-xs text-zinc-300 font-medium">Use Green Screen (Highly Recommended)</span>
@@ -426,7 +457,7 @@ export default function App() {
                                 onChange={() => toggleOption('greenScreenOverlay')}
                               />
                             </label>
-                            
+
                             <p className="text-xs text-zinc-500 leading-relaxed">
                               {options.greenScreenOverlay ? (
                                 <>Export captions as a fast <span className="text-emerald-400 font-medium">.mp4 (Green Screen)</span> — remove background in CapCut using Chroma Key.</>
@@ -437,13 +468,12 @@ export default function App() {
                             <button
                               onClick={handleExportOverlay}
                               disabled={!selectedFilePath || isBusy}
-                              className={`w-full py-2.5 rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2 ${
-                                isBusy || !selectedFilePath
-                                  ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-                                  : options.greenScreenOverlay
-                                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_16px_rgba(16,185,129,0.3)] active:scale-[0.99]'
-                                    : 'bg-sky-600 hover:bg-sky-500 text-white shadow-[0_0_16px_rgba(14,165,233,0.3)] active:scale-[0.99]'
-                              }`}
+                              className={`w-full py-2.5 rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2 ${isBusy || !selectedFilePath
+                                ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                                : options.greenScreenOverlay
+                                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_16px_rgba(16,185,129,0.3)] active:scale-[0.99]'
+                                  : 'bg-sky-600 hover:bg-sky-500 text-white shadow-[0_0_16px_rgba(14,165,233,0.3)] active:scale-[0.99]'
+                                }`}
                             >
                               {isExportingOverlay ? (
                                 <>
@@ -461,12 +491,10 @@ export default function App() {
                               <p className="text-[10px] text-zinc-600 text-center">Select a video file first</p>
                             )}
                           </div>
-                          {/* ───────────────────────────────────────────────── */}
 
                         </div>
                       )}
 
-                      {/* ── Cinematic Color sub-menu ── */}
                       {key === 'cinematicColor' && options.cinematicColor && (
                         <div className="flex flex-col gap-3 p-3 ml-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
                           <div className="flex items-center justify-between">
@@ -486,7 +514,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Render button */}
               <button onClick={handleRunPipeline}
                 disabled={!selectedFilePath || isBusy || activeCount === 0}
                 className="w-full py-4 rounded-xl font-bold text-base bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] shadow-[0_0_20px_rgba(5,150,105,0.35)] disabled:opacity-40 disabled:cursor-not-allowed transition-all">
@@ -497,7 +524,6 @@ export default function App() {
                 ) : 'RENDER VIDEO'}
               </button>
 
-              {/* Terminal console */}
               {terminalLines.length > 0 && (
                 <div className="bg-black border border-zinc-800 rounded-xl overflow-hidden">
                   <div className="px-4 py-2 border-b border-zinc-800 flex items-center gap-2">
@@ -509,16 +535,15 @@ export default function App() {
                   </div>
                   <div className="p-4 max-h-64 overflow-y-auto">
                     {terminalLines.map((line, i) => (
-                      <div key={i} className={`text-xs font-mono leading-5 ${
-                        line.startsWith('[ERROR]') || line.startsWith('❌') ? 'text-red-400' :
-                        line.startsWith('[✅]')  ? 'text-emerald-400' :
-                        line.startsWith('[⚡]')  ? 'text-yellow-400'  :
-                        line.startsWith('[⚙️]') ? 'text-zinc-300'    :
-                        line.startsWith('[🎬]') ? 'text-purple-400 font-semibold' :
-                        line.startsWith('[📦]') ? 'text-sky-400 font-semibold'    :
-                        line.startsWith('[📋]') ? 'text-sky-300'     :
-                        'text-zinc-500'
-                      }`}>
+                      <div key={i} className={`text-xs font-mono leading-5 ${line.startsWith('[ERROR]') || line.startsWith('❌') ? 'text-red-400' :
+                        line.startsWith('[✅]') ? 'text-emerald-400' :
+                          line.startsWith('[⚡]') ? 'text-yellow-400' :
+                            line.startsWith('[⚙️]') ? 'text-zinc-300' :
+                              line.startsWith('[🎬]') ? 'text-purple-400 font-semibold' :
+                                line.startsWith('[📦]') ? 'text-sky-400 font-semibold' :
+                                  line.startsWith('[📋]') ? 'text-sky-300' :
+                                    'text-zinc-500'
+                        }`}>
                         {line}
                       </div>
                     ))}

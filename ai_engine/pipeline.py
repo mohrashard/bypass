@@ -605,9 +605,10 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
         CRITICAL RULES: 
         1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
         2. Break the text into short, logical phrases of exactly 3 to 5 words each.
-        3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe"). 
+        3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe" , commission). 
         4. NUMBER FORMATTING: Convert all spoken Sinhala or English numbers into actual digits (e.g., "රුපියල් පන්දහක්" must become "රුපියල් 5000").
-        5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., if "engineer කෙනෙක්" keep it as "engineer කෙනෙක්", keep "direct වැඩගන්න"  "direct වැඩගන්න").
+        5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., if "engineer කෙනෙක්" keep it as "engineer කෙනෙක්", keep "direct වැඩගන්න"  "direct වැඩගන්න" , "බාස්").
+        6. KEYWORDS: Professional field engineer , commission , field engineer , direct , scam , skill , follow , comment , බාස් (dont hallucinate)
         
         You must provide the approximate start and end times for each phrase in seconds.
         Output strictly as a JSON array. Example:
@@ -769,6 +770,11 @@ def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list) -> list:
 # Segment boundaries are 100% reliable; word boundaries on Sinhala are not.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATED stage_burn_sinhala_captions
+# Key change: Template Engine + Segment anchors
+# ─────────────────────────────────────────────────────────────────────────────
+
 def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     import json, shutil, subprocess, os
     from playwright.sync_api import sync_playwright
@@ -778,7 +784,9 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     ovr_dir    = os.path.join(base_dir, "_cap_overlays_si")
     os.makedirs(ovr_dir, exist_ok=True)
 
-    p_class = cap_options.get("captionPrimaryStyle", "p-glass-silver")
+    si_main_class = cap_options.get("siMainStyle", "si-main-blue")
+    si_pri_class  = cap_options.get("siPrimaryStyle", "si-pri-silver")
+    si_sec_class  = cap_options.get("siSecondaryStyle", "si-sec-gold")
 
     # 1. Extract Audio
     temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
@@ -799,9 +807,6 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     print(f"[⚙️] Extracted {len(gemini_phrases)} Singlish phrases from Gemini.")
 
     # ── STEP 2: Whisper — SEGMENT MODE (most reliable for Sinhala) ───────────
-    # We intentionally collect SEGMENT-level anchors, not word-level.
-    # On Sinhala audio, Whisper's word splits are unreliable but its
-    # segment boundaries (silence-detected cuts) are rock-solid.
     print("[⚙️] Running Whisper (base) — SEGMENT-ANCHOR mode for Sinhala...")
     whisper_words = []
     try:
@@ -825,13 +830,9 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
             word_timestamps=True,
             vad_filter=True,
             condition_on_previous_text=False
-            # NO language= param — language-agnostic for Sinhala
         )
         w_segments_list = list(w_segments_raw)
 
-        # ── PRIMARY: use segment boundaries as anchors ──────────────────────
-        # Each "anchor" covers the full segment window.
-        # align_phrases_to_whisper will snap phrase starts INTO these windows.
         for seg in w_segments_list:
             whisper_words.append({
                 "word":  "[seg]",
@@ -839,9 +840,6 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                 "end":   seg.end
             })
 
-        # ── SECONDARY: also collect word anchors IF there are enough of them ─
-        # More anchors = finer resolution. We only add words if they cover
-        # the audio densely enough to be useful.
         word_anchors = []
         for seg in w_segments_list:
             for w in (seg.words or []):
@@ -853,10 +851,8 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                     })
 
         if len(word_anchors) >= len(gemini_phrases) * 1.5:
-            # Dense enough — merge both for maximum resolution
             combined = whisper_words + word_anchors
             combined.sort(key=lambda x: x["start"])
-            # Deduplicate timestamps within 50ms of each other
             deduped = [combined[0]] if combined else []
             for a in combined[1:]:
                 if a["start"] - deduped[-1]["start"] > 0.05:
@@ -885,7 +881,6 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
             for p in gemini_phrases
         ]
 
-    # 3. Video dimensions
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height,r_frame_rate",
@@ -914,21 +909,33 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     background-clip: text; color: transparent;
   }}
-  .sin-blue {{
-    font-family: 'Gemunu Libre', sans-serif; font-weight: 800;
-    background-image: linear-gradient(to bottom, #82cfff 0%, #0077ff 100%);
-    filter: drop-shadow(0 0 12px rgba(0, 100, 255, 0.9)) drop-shadow(0 3px 5px rgba(0,0,0,0.9));
-  }}
-  .eng-silver {{
-    font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -0.5px;
-    background-image: linear-gradient(160deg, #ffffff 0%, #d2e8ff 30%, #b4d7ff 60%, #ffffff 100%);
-    filter: drop-shadow(0 0 10px rgba(140,185,255,0.5)) drop-shadow(0 2px 4px rgba(0,0,0,0.8));
-  }}
-  .num-gold {{
-    font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -1px;
-    background-image: linear-gradient(to bottom, #FFE81F 0%, #FF8A00 100%);
-    filter: drop-shadow(0 0 15px rgba(255,165,0,0.6)) drop-shadow(0 3px 6px rgba(0,0,0,0.9));
-  }}
+  .si-font-main {{ font-family: 'Gemunu Libre', sans-serif; font-weight: 800; }}
+  .si-font-pri {{ font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -0.5px; }}
+  .si-font-sec {{ font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -1px; }}
+
+  /* Main (Sinhala) */
+  .si-main-blue {{ background-image: linear-gradient(to bottom, #82cfff 0%, #0077ff 100%); filter: drop-shadow(0 0 12px rgba(0, 100, 255, 0.9)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-main-emerald {{ background-image: linear-gradient(to bottom, #34d399 0%, #059669 100%); filter: drop-shadow(0 0 10px rgba(16, 185, 129, 0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
+  .si-main-crimson {{ background-image: linear-gradient(to bottom, #fb7185 0%, #e11d48 100%); filter: drop-shadow(0 0 12px rgba(225, 29, 72, 0.7)) drop-shadow(0 3px 6px rgba(0,0,0,0.9)); }}
+  .si-main-amber {{ background-image: linear-gradient(to bottom, #fcd34d 0%, #d97706 100%); filter: drop-shadow(0 0 10px rgba(217, 119, 6, 0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
+  .si-main-purple {{ background-image: linear-gradient(to right, #e879f9 0%, #a21caf 100%); filter: drop-shadow(0 0 12px rgba(192, 38, 211, 0.7)) drop-shadow(0 2px 5px rgba(0,0,0,0.9)); }}
+  .si-main-white {{ background-image: linear-gradient(to bottom, #ffffff 0%, #e5e5e5 100%); filter: drop-shadow(0 4px 6px rgba(0,0,0,1)) drop-shadow(0 1px 3px rgba(0,0,0,0.8)); }}
+
+  /* Primary (English) */
+  .si-pri-silver {{ background-image: linear-gradient(160deg, #ffffff 0%, #d2e8ff 30%, #b4d7ff 60%, #ffffff 100%); filter: drop-shadow(0 0 10px rgba(140,185,255,0.5)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
+  .si-pri-gold {{ background-image: linear-gradient(160deg, #fef08a 0%, #eab308 50%, #ca8a04 100%); filter: drop-shadow(0 0 8px rgba(234, 179, 8, 0.4)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
+  .si-pri-cyan {{ background-image: linear-gradient(to bottom, #67e8f9 0%, #06b6d4 100%); filter: drop-shadow(0 0 10px rgba(6, 182, 212, 0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
+  .si-pri-magenta {{ background-image: linear-gradient(to right, #f472b6 0%, #db2777 100%); filter: drop-shadow(0 0 10px rgba(219, 39, 119, 0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
+  .si-pri-slate {{ background-image: linear-gradient(to bottom, #cbd5e1 0%, #64748b 100%); filter: drop-shadow(0 3px 8px rgba(0,0,0,1)) drop-shadow(0 1px 2px rgba(0,0,0,0.9)); }}
+  .si-pri-neon-green {{ background-image: linear-gradient(to bottom, #bef264 0%, #65a30d 100%); filter: drop-shadow(0 0 12px rgba(101, 163, 13, 0.7)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
+
+  /* Secondary (Numbers) */
+  .si-sec-gold {{ background-image: linear-gradient(to bottom, #FFE81F 0%, #FF8A00 100%); filter: drop-shadow(0 0 15px rgba(255,165,0,0.6)) drop-shadow(0 3px 6px rgba(0,0,0,0.9)); }}
+  .si-sec-red {{ background-image: linear-gradient(to bottom, #fca5a5 0%, #dc2626 100%); filter: drop-shadow(0 0 12px rgba(220, 38, 38, 0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-sec-lime {{ background-image: linear-gradient(to bottom, #d9f99d 0%, #65a30d 100%); filter: drop-shadow(0 0 12px rgba(132, 204, 22, 0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-sec-pink {{ background-image: linear-gradient(to bottom, #f9a8d4 0%, #db2777 100%); filter: drop-shadow(0 0 12px rgba(219, 39, 119, 0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-sec-aqua {{ background-image: linear-gradient(to bottom, #7dd3fc 0%, #0284c7 100%); filter: drop-shadow(0 0 12px rgba(2, 132, 199, 0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-sec-white {{ background-image: linear-gradient(to bottom, #ffffff 0%, #f3f4f6 100%); filter: drop-shadow(0 0 15px rgba(255,255,255,0.5)) drop-shadow(0 4px 6px rgba(0,0,0,1)); }}
 </style>
 </head>
 <body>
@@ -968,23 +975,30 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                     const midPoint = Math.ceil(words.length / 2);
                     words.forEach((word, index) => {
                         let className = '';
+                        let baseClass = '';
                         let size = args.fontSize;
                         if (/\\d+/.test(word)) {
-                            className = 'num-gold';
+                            className = args.secClass;
+                            baseClass = 'si-font-sec';
                         } else if (/[A-Za-z]/.test(word)) {
-                            className = 'eng-silver';
+                            className = args.priClass;
+                            baseClass = 'si-font-pri';
                         } else {
-                            className = 'sin-blue';
+                            className = args.mainClass;
+                            baseClass = 'si-font-main';
                             size += 5;
                         }
-                        innerHtml += `<span class="phrase-cap ${className}" style="font-size: ${size}px;">${word}</span>`;
+                        innerHtml += `<span class="phrase-cap ${baseClass} ${className}" style="font-size: ${size}px;">${word}</span>`;
                         if (words.length >= 3 && index === midPoint - 1) {
                             innerHtml += '<br>';
                         }
                     });
                     el.innerHTML = innerHtml;
                 }
-            """, {"text": phrase_text, "fontSize": font_size})
+            """, {
+                "text": phrase_text, "fontSize": font_size,
+                "mainClass": si_main_class, "priClass": si_pri_class, "secClass": si_sec_class
+            })
 
             page.screenshot(path=png_path, full_page=False, omit_background=True)
             segments_arr.append((start_time, end_time, png_path, phrase_text, None))
@@ -1256,40 +1270,56 @@ def stage_semantic_zoom(video_path: str, zoom_options: dict) -> str:
     # 1. Extract audio for fast analysis
     subprocess.run(["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", temp_audio, "-y"], check=True, capture_output=True)
 
-    # Use the 'base' model for lightning-fast keyword spotting
-    try:
-        from faster_whisper import WhisperModel
-        w_model = WhisperModel("base", device="cuda", compute_type="float16")
-    except Exception:
-        w_model = WhisperModel("base", device="cpu", compute_type="int8")
-        
-    w_segments_raw, _ = w_model.transcribe(
-        temp_audio,
-        word_timestamps=True,
-        vad_filter=True,
-        condition_on_previous_text=False
-    )
-
-    # 2. Viral Hook Dictionary (Customize these to your niche)
-    hook_words = [
+    # 2. Viral Hook Dictionaries (English + Sinhala/Singlish)
+    en_hooks = [
         "important", "secret", "listen", "stop", "never", "always", 
         "money", "hack", "trick", "reason", "best", "worst", "look", 
         "insane", "crazy", "truth", "give", "warning", "attention"
     ]
+    si_hooks = [
+        "වැදගත්", "රහස", "අහන්න", "බලන්න", "සල්ලි", "හේතුව", "හොඳම", 
+        "පිස්සුවක්", "ඇත්ත", "අනිවාර්යයෙන්", "scam", "trick", "money", 
+        "direct", "skill" , "professional field engineer" , "field engineer"
+    ]
 
     zoom_intervals = []
-    
-    # 3. Find exactly when these words are spoken
-    for seg in list(w_segments_raw):
-        for w in (seg.words or []):
-            clean_word = w.word.strip().lower()
-            clean_word = ''.join(e for e in clean_word if e.isalnum())
+    lang = zoom_options.get("captionLanguage", "en")
 
-            if clean_word in hook_words:
-                # Trigger a zoom for 2.5 seconds starting at this exact word
-                start = w["start"]
-                end = start + 2.5
-                zoom_intervals.append((start, end))
+    # 3. Branching Logic: Gemini for Sinhala, Whisper for English
+    if lang == "si":
+        print("[⚙️] Using Gemini to detect Sinhala hook words for zooming...")
+        # Re-using your custom Gemini extraction function
+        phrases = get_perfect_sinhala_transcript(temp_audio, zoom_options.get("geminiApiKey"))
+        
+        for p in phrases:
+            phrase_text = p.get("phrase", "").lower()
+            # Check if any hook word exists inside the Gemini phrase
+            if any(hook in phrase_text for hook in si_hooks + en_hooks):
+                start = float(p.get("start", 0))
+                zoom_intervals.append((start, start + 2.5))
+    else:
+        print("[⚙️] Using Whisper to detect English hook words for zooming...")
+        try:
+            from faster_whisper import WhisperModel
+            w_model = WhisperModel("base", device="cuda", compute_type="float16")
+        except Exception:
+            w_model = WhisperModel("base", device="cpu", compute_type="int8")
+            
+        w_segments_raw, _ = w_model.transcribe(
+            temp_audio,
+            word_timestamps=True,
+            vad_filter=True,
+            condition_on_previous_text=False
+        )
+
+        for seg in list(w_segments_raw):
+            for w in (seg.words or []):
+                clean_word = w.word.strip().lower()
+                clean_word = ''.join(e for e in clean_word if e.isalnum())
+
+                if clean_word in en_hooks:
+                    start = w["start"]
+                    zoom_intervals.append((start, start + 2.5))
 
     if not zoom_intervals:
         print("[⚙️] No hook words found. Skipping Smart Zoom.")
@@ -1309,23 +1339,16 @@ def stage_semantic_zoom(video_path: str, zoom_options: dict) -> str:
 
     # 5. Build the dynamic FFmpeg zoompan mathematical expression
     intensity = float(zoom_options.get("zoomIntensity", 1.15))
-    
-    # Grab the speed from the frontend (defaults to 0.75s if missing)
     duration = float(zoom_options.get("zoomSpeed", 0.5))
-    
-    # Calculate smooth speed (reaches max zoom in X seconds based on video FPS)
     zoom_speed = (intensity - 1.0) / (fps * duration)
     
-    # The Math: 'time' is the current second. 'pzoom' is the zoom level of the last frame.
     z_expr = "1"
     for (start, end) in zoom_intervals:
         z_expr = f"if(between(time,{start:.2f},{end:.2f}), min(pzoom+{zoom_speed:.5f},{intensity}), {z_expr})"
 
-    # Keep the camera perfectly centered while zooming
     x_expr = f"({W}-({W}/zoom))/2"
     y_expr = f"({H}-({H}/zoom))/2"
 
-    # d=1 means 1 output frame per input frame (crucial for processing video)
     filter_complex = f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':d=1:s={W}x{H}:fps={fps}"
 
     try:
