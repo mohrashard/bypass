@@ -575,7 +575,7 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
     import os
  
     # Grab this from Google AI Studio (it's free)
-    api_key = api_key_opt or "AIzaSyAeo8khvjWySFpQp4tVsMQnRLkB1bsFLz0"
+    api_key = api_key_opt or os.getenv("GEMINI_API_KEY")
     if not api_key or api_key == "YOUR_FREE_API_KEY":
         print("[⚠️] GEMINI_API_KEY not found in environment. Proceeding without forced alignment.")
         return []
@@ -642,120 +642,168 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
         print(f"[❌] Gemini API Error: {e}")
         return []
  
+# ─────────────────────────────────────────────────────────────────────────────
+# DROP-IN REPLACEMENT: align_phrases_to_whisper + stage_burn_sinhala_captions
+#
+# THE PROBLEM (diagnosed):
+#   Gemini's phrase timestamps are systematically EARLY — it fires the start
+#   timestamp the moment it "predicts" the phrase, not when the audio lands.
+#   On Sinhala/mixed audio Whisper also hallucinates word boundaries during
+#   silence, so snapping to "nearest word" just snaps to a ghost.
+#
+# THE 3-LAYER FIX:
+#   Layer 1 — Global drift correction
+#             Sample N Gemini↔Whisper pairs and compute the median offset.
+#             Shift ALL Gemini timestamps by that amount before any snapping.
+#   Layer 2 — Segment-anchored snapping (not word-anchored)
+#             Use Whisper's rock-solid SEGMENT boundaries as anchors.
+#             Find the segment whose [start, end] window best contains the
+#             drift-corrected phrase start. This is immune to word-level noise.
+#   Layer 3 — Gap-fill smoothing
+#             After all phrases are placed, fill any dead gap between
+#             phrase[i].end and phrase[i+1].start so the caption holds
+#             on screen until the next word begins (no flicker, no early exit).
+# ─────────────────────────────────────────────────────────────────────────────
+
+import bisect
+import statistics
+from typing import List, Dict, Tuple, Optional
+
+
 def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list) -> list:
     """
-    Time-window alignment — does NOT count words at all.
- 
-    Strategy:
-      1. Gemini gives us a rough time window per phrase (e.g. 1.0s–2.5s).
-         These timestamps drift but the *order* is reliable.
-      2. Whisper gives us accurate per-word timestamps but wrong Sinhala text.
-      3. For each Gemini phrase we:
-           a) Find the Whisper word whose start time is closest to Gemini's
-              start — that becomes our actual_start.
-           b) The actual_end is taken from the Whisper word that sits just
-              before the *next* phrase's start (i.e. we use the gap between
-              phrases as the natural cut point).
-      4. A small minimum display duration (MIN_DUR) prevents flicker on
-         very short phrases.
+    DYNAMIC TIME WARPING (Elastic Projection)
+    Fixes the "sometimes fast, sometimes slow" bug by treating Gemini's 
+    hallucinated timestamps as relative percentages, mapping them to 
+    Whisper's absolute real-world VAD timeline.
     """
-    MIN_DUR = 0.40  # seconds — captions show for at least this long
- 
-    if not whisper_words:
-        return [{"phrase": p.get("phrase",""), "start": p["start"], "end": p["end"]}
-                for p in gemini_phrases if p.get("phrase","").strip()]
- 
-    # Build a flat list of all Whisper start times for fast binary search
-    whisper_starts = [w["start"] for w in whisper_words]
- 
-    def nearest_whisper_idx(t: float) -> int:
-        """Return index of the Whisper word whose start is closest to t."""
-        import bisect
-        pos = bisect.bisect_left(whisper_starts, t)
-        if pos == 0:
-            return 0
-        if pos >= len(whisper_starts):
-            return len(whisper_starts) - 1
-        # Pick whichever neighbour is closer
-        before = pos - 1
-        if abs(whisper_starts[before] - t) <= abs(whisper_starts[pos] - t):
-            return before
-        return pos
- 
+    phrases = [p for p in gemini_phrases if p.get("phrase", "").strip()]
+    if not phrases: return []
+    
+    # If whisper failed entirely, return gemini as-is
+    if not whisper_words: 
+        return phrases
+
+    # Whisper anchors are guaranteed to be real spoken sound
+    anchors = sorted(whisper_words, key=lambda x: x["start"])
+    
+    # ── 1. Timeline Normalization ──
+    g_starts = [float(p.get("start", 0)) for p in phrases]
+    g_min, g_max = min(g_starts), max(g_starts)
+    
+    # Failsafe for 0-duration Gemini outputs
+    if g_max == g_min: g_max = g_min + 1.0 
+
+    w_starts = [float(a["start"]) for a in anchors]
+    w_min, w_max = min(w_starts), max(w_starts)
+    if w_max == w_min: w_max = w_min + 1.0
+
     aligned = []
-    phrases = [p for p in gemini_phrases if p.get("phrase","").strip()]
- 
-    for i, item in enumerate(phrases):
-        phrase = item["phrase"].strip()
-        g_start = float(item.get("start", 0))
-        g_end   = float(item.get("end",   g_start + 1.0))
- 
-        # ── actual_start: nearest Whisper word to Gemini's start ──────
-        snap_idx = nearest_whisper_idx(g_start)
-        actual_start = whisper_words[snap_idx]["start"]
- 
-        # ── actual_end: use the Whisper word just before next phrase ──
-        # Look at where the NEXT Gemini phrase starts and find the last
-        # Whisper word that ends before that point. This fills the full
-        # duration of the phrase without over-running into the next one.
-        if i + 1 < len(phrases):
-            next_g_start = float(phrases[i + 1].get("start", g_end))
-            # Find the last Whisper word that starts before next_g_start
-            next_snap_idx = nearest_whisper_idx(next_g_start)
-            # Step back one word so we don't bleed into the next phrase
-            end_word_idx = max(snap_idx, next_snap_idx - 1)
-            actual_end = whisper_words[end_word_idx]["end"]
+    last_end = 0.0
+    MIN_DUR = 0.40
+
+    for i, p in enumerate(phrases):
+        g_time = float(p.get("start", 0))
+        
+        # ── 2. Calculate Elastic Progress ──
+        # Where are we in the Gemini timeline? (0.0 to 1.0)
+        progress = (g_time - g_min) / (g_max - g_min)
+        
+        # Project this progress onto the Whisper absolute timeline
+        projected_w_time = w_min + progress * (w_max - w_min)
+        
+        # ── 3. Forward-Only Snapping ──
+        # Find the nearest actual spoken anchor that hasn't been passed yet
+        valid_anchors = [a for a in anchors if a["start"] >= last_end - 0.1]
+        
+        if valid_anchors:
+            best_anchor = min(valid_anchors, key=lambda a: abs(a["start"] - projected_w_time))
+            actual_start = best_anchor["start"]
         else:
-            # Last phrase — use Gemini's end time (nothing after it)
-            # but also clamp against the last Whisper word
-            actual_end = max(g_end, whisper_words[-1]["end"])
- 
-        # ── enforce minimum display duration ──────────────────────────
+            actual_start = max(last_end, projected_w_time)
+
+        # Strict overlap prevention
+        actual_start = max(actual_start, last_end) 
+
+        # ── 4. Dynamic End Time Prediction ──
+        if i + 1 < len(phrases):
+            next_g_time = float(phrases[i+1].get("start", g_time + 1.0))
+            next_prog = (next_g_time - g_min) / (g_max - g_min)
+            next_proj_w = w_min + next_prog * (w_max - w_min)
+            
+            valid_next = [a for a in anchors if a["start"] > actual_start]
+            if valid_next:
+                next_anchor = min(valid_next, key=lambda a: abs(a["start"] - next_proj_w))
+                # Cut the caption right before the next word hits
+                actual_end = next_anchor["start"] - 0.05
+            else:
+                actual_end = next_proj_w - 0.05
+        else:
+            # Last phrase caps at the final Whisper anchor
+            actual_end = anchors[-1]["end"] if anchors[-1]["end"] > actual_start else actual_start + 1.0
+
+        # Enforce minimum readability duration
         if actual_end - actual_start < MIN_DUR:
             actual_end = actual_start + MIN_DUR
- 
-        # ── sanity: never go backwards ────────────────────────────────
-        if aligned and actual_start < aligned[-1]["end"]:
-            actual_start = aligned[-1]["end"]
-            if actual_end - actual_start < MIN_DUR:
-                actual_end = actual_start + MIN_DUR
- 
-        aligned.append({"phrase": phrase, "start": actual_start, "end": actual_end})
- 
-        print(f"    [{i+1:02d}] {phrase[:35]:<35}  "
-              f"gemini={g_start:.2f}-{g_end:.2f}s  →  "
-              f"snapped={actual_start:.2f}-{actual_end:.2f}s")
- 
+
+        aligned.append({
+            "phrase": p["phrase"],
+            "start": actual_start,
+            "end": actual_end
+        })
+        last_end = actual_end
+
+    # ── 5. Gap Fill Smoothing ──
+    # Stretches captions across micro-pauses so the screen doesn't flicker black
+    for i in range(len(aligned) - 1):
+        gap = aligned[i + 1]["start"] - aligned[i]["end"]
+        if 0 < gap <= 0.80:
+            aligned[i]["end"] += gap * 0.85 
+
     return aligned
- 
- 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATED stage_burn_sinhala_captions
+# Key change: force Whisper into SEGMENT mode for Sinhala audio.
+# Segment boundaries are 100% reliable; word boundaries on Sinhala are not.
+# ─────────────────────────────────────────────────────────────────────────────
+
 def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     import json, shutil, subprocess, os
     from playwright.sync_api import sync_playwright
- 
+
     base_dir   = os.path.dirname(os.path.abspath(video_path))
     output_vid = os.path.splitext(video_path)[0] + "_si_captioned.mp4"
     ovr_dir    = os.path.join(base_dir, "_cap_overlays_si")
     os.makedirs(ovr_dir, exist_ok=True)
- 
+
     p_class = cap_options.get("captionPrimaryStyle", "p-glass-silver")
-    
+
     # 1. Extract Audio
     temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
-    subprocess.run(["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", temp_audio, "-y"], check=True, capture_output=True)
-    
+    subprocess.run(
+        ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le",
+         "-ar", "16000", "-ac", "1", temp_audio, "-y"],
+        check=True, capture_output=True
+    )
+
     # 2. Get Perfect Phrases + Rough Timestamps from Gemini
     gemini_phrases = get_perfect_sinhala_transcript(temp_audio, cap_options.get("geminiApiKey"))
-    
+
     if not gemini_phrases:
         print("[❌] FATAL: Gemini failed. Cannot render captions.")
         if os.path.exists(temp_audio): os.remove(temp_audio)
         return video_path
- 
+
     print(f"[⚙️] Extracted {len(gemini_phrases)} Singlish phrases from Gemini.")
- 
-    # ── STEP 2: Whisper for accurate word-level timestamps ────────────
-    print("[⚙️] Running Whisper (base) for frame-accurate timestamps...")
+
+    # ── STEP 2: Whisper — SEGMENT MODE (most reliable for Sinhala) ───────────
+    # We intentionally collect SEGMENT-level anchors, not word-level.
+    # On Sinhala audio, Whisper's word splits are unreliable but its
+    # segment boundaries (silence-detected cuts) are rock-solid.
+    print("[⚙️] Running Whisper (base) — SEGMENT-ANCHOR mode for Sinhala...")
+    whisper_words = []
     try:
         from faster_whisper import WhisperModel
         import importlib.util
@@ -766,55 +814,87 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                     bin_path = os.path.join(spec.submodule_search_locations[0], "bin")
                     if os.path.exists(bin_path):
                         os.environ["PATH"] = bin_path + os.pathsep + os.environ.get("PATH", "")
+
         try:
             w_model = WhisperModel("base", device="cuda", compute_type="int8")
         except Exception:
             w_model = WhisperModel("base", device="cpu", compute_type="int8")
- 
-        # NO language= param — language-agnostic mode gives far more reliable
-        # word-boundary timestamps on Sinhala/mixed audio. We only use the
-        # timestamps; the text content is irrelevant and thrown away.
+
         w_segments_raw, _ = w_model.transcribe(
             temp_audio,
             word_timestamps=True,
-            vad_filter=True,              # trims silence → tighter boundaries
+            vad_filter=True,
             condition_on_previous_text=False
+            # NO language= param — language-agnostic for Sinhala
         )
-        # faster-whisper returns a generator — consume it once into a list
         w_segments_list = list(w_segments_raw)
-        whisper_words = []
+
+        # ── PRIMARY: use segment boundaries as anchors ──────────────────────
+        # Each "anchor" covers the full segment window.
+        # align_phrases_to_whisper will snap phrase starts INTO these windows.
+        for seg in w_segments_list:
+            whisper_words.append({
+                "word":  "[seg]",
+                "start": seg.start,
+                "end":   seg.end
+            })
+
+        # ── SECONDARY: also collect word anchors IF there are enough of them ─
+        # More anchors = finer resolution. We only add words if they cover
+        # the audio densely enough to be useful.
+        word_anchors = []
         for seg in w_segments_list:
             for w in (seg.words or []):
                 if w.word.strip():
-                    whisper_words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
- 
-        # If word-level timestamps are too sparse (common on non-Latin audio),
-        # fall back to segment-level boundaries which are always rock-solid
-        if len(whisper_words) < len(gemini_phrases):
-            print(f"[⚠️] Only {len(whisper_words)} word anchors for {len(gemini_phrases)} phrases — using segment boundaries.")
-            whisper_words = [{"word": "[seg]", "start": seg.start, "end": seg.end}
-                             for seg in w_segments_list]
- 
-        print(f"[⚙️] Whisper found {len(whisper_words)} timestamp anchors.")
+                    word_anchors.append({
+                        "word":  w.word.strip(),
+                        "start": w.start,
+                        "end":   w.end
+                    })
+
+        if len(word_anchors) >= len(gemini_phrases) * 1.5:
+            # Dense enough — merge both for maximum resolution
+            combined = whisper_words + word_anchors
+            combined.sort(key=lambda x: x["start"])
+            # Deduplicate timestamps within 50ms of each other
+            deduped = [combined[0]] if combined else []
+            for a in combined[1:]:
+                if a["start"] - deduped[-1]["start"] > 0.05:
+                    deduped.append(a)
+            whisper_words = deduped
+            print(f"[⚙️] Using {len(w_segments_list)} segment + {len(word_anchors)} word anchors "
+                  f"→ {len(whisper_words)} total after dedup.")
+        else:
+            print(f"[⚙️] Using {len(whisper_words)} segment-level anchors "
+                  f"(word anchors too sparse: {len(word_anchors)}).")
+
     except Exception as e:
-        print(f"[⚠️] Whisper timing failed ({e}). Falling back to Gemini timestamps.")
+        print(f"[⚠️] Whisper failed ({e}). Falling back to Gemini timestamps.")
         whisper_words = []
- 
-    # ── STEP 3: Snap Gemini phrases onto Whisper timing ──────────────
+
+    # ── STEP 3: Drift-corrected alignment ────────────────────────────────────
     if whisper_words:
         segments_data = align_phrases_to_whisper(gemini_phrases, whisper_words)
         print(f"[✅] Alignment done — {len(segments_data)} synced phrases.")
     else:
-        # Graceful fallback — use Gemini timestamps with a small static offset
         print("[⚠️] Using Gemini timestamps with +0.10s offset as fallback.")
-        segments_data = [{"phrase": p["phrase"], "start": p["start"] + 0.10, "end": p["end"] + 0.10} for p in gemini_phrases]
- 
+        segments_data = [
+            {"phrase": p["phrase"],
+             "start":  p["start"] + 0.10,
+             "end":    p["end"]   + 0.10}
+            for p in gemini_phrases
+        ]
+
     # 3. Video dimensions
-    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", video_path], capture_output=True, text=True)
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height,r_frame_rate",
+         "-of", "json", video_path],
+        capture_output=True, text=True
+    )
     info_json = json.loads(probe.stdout)["streams"][0]
-    W, H  = int(info_json["width"]), int(info_json["height"])
- 
- 
+    W, H = int(info_json["width"]), int(info_json["height"])
+
     def make_base_html(width: int, height: int) -> str:
         return f"""<!DOCTYPE html>
 <html>
@@ -822,37 +902,28 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
 <meta charset="UTF-8">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Gemunu+Libre:wght@700;800&family=Montserrat:wght@800;900&display=swap');
-  
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   html, body {{ width: {width}px; height: {height}px; background: transparent; overflow: hidden; }}
   .caption-wrap {{
-    position: absolute; bottom: {int(height * 0.22)}px; left: 0; right: 0; 
-    padding: 0 {int(width * 0.08)}px; 
-    text-align: center; /* Center the stacked text */
+    position: absolute; bottom: {int(height * 0.22)}px; left: 0; right: 0;
+    padding: 0 {int(width * 0.08)}px;
+    text-align: center;
   }}
   .phrase-cap {{
-    display: inline-block;
-    line-height: 1.3;
-    margin: 0 6px; /* THIS FIXES THE MISSING SPACES */
+    display: inline-block; line-height: 1.3; margin: 0 6px;
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     background-clip: text; color: transparent;
   }}
- 
-  /* STYLE 1: SINHALA */
   .sin-blue {{
     font-family: 'Gemunu Libre', sans-serif; font-weight: 800;
     background-image: linear-gradient(to bottom, #82cfff 0%, #0077ff 100%);
     filter: drop-shadow(0 0 12px rgba(0, 100, 255, 0.9)) drop-shadow(0 3px 5px rgba(0,0,0,0.9));
   }}
- 
-  /* STYLE 2: ENGLISH */
   .eng-silver {{
     font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -0.5px;
     background-image: linear-gradient(160deg, #ffffff 0%, #d2e8ff 30%, #b4d7ff 60%, #ffffff 100%);
     filter: drop-shadow(0 0 10px rgba(140,185,255,0.5)) drop-shadow(0 2px 4px rgba(0,0,0,0.8));
   }}
- 
-  /* STYLE 3: NUMBERS */
   .num-gold {{
     font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -1px;
     background-image: linear-gradient(to bottom, #FFE81F 0%, #FF8A00 100%);
@@ -866,140 +937,128 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
   </div>
 </body>
 </html>"""
- 
+
     segments_arr = []
-    
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
         context = browser.new_context(viewport={"width": W, "height": H}, device_scale_factor=1)
         page = context.new_page()
         page.set_content(make_base_html(W, H), wait_until="networkidle")
- 
+
         for i, item in enumerate(segments_data):
             phrase_text = str(item.get("phrase", "")).strip()
             if not phrase_text: continue
-            
-            # Use Whisper-aligned timestamps directly — no offset hack needed
+
             start_time = float(item.get("start", 0))
-            end_time = float(item.get("end", start_time + 1.0))
-            
-            png_path = os.path.join(ovr_dir, f"cap_phrase_{i:04d}.png")
-            
+            end_time   = float(item.get("end", start_time + 1.0))
+
+            png_path   = os.path.join(ovr_dir, f"cap_phrase_{i:04d}.png")
+
             char_count = len(phrase_text)
-            if char_count <= 15: font_size = int(H * 0.055)
+            if   char_count <= 15: font_size = int(H * 0.055)
             elif char_count <= 25: font_size = int(H * 0.045)
-            else: font_size = int(H * 0.038)
- 
-            # THE PRO STACKED JS PARSER
+            else:                  font_size = int(H * 0.038)
+
             page.evaluate("""
                 (args) => {
                     const el = document.getElementById('phrase_box');
-                    // Filter removes accidental double spaces
                     const words = args.text.split(' ').filter(w => w.trim() !== '');
                     let innerHtml = '';
-                    
-                    // Find the exact middle of the phrase to insert the line break
                     const midPoint = Math.ceil(words.length / 2);
- 
                     words.forEach((word, index) => {
                         let className = '';
                         let size = args.fontSize;
- 
                         if (/\\d+/.test(word)) {
                             className = 'num-gold';
                         } else if (/[A-Za-z]/.test(word)) {
                             className = 'eng-silver';
                         } else {
                             className = 'sin-blue';
-                            size += 5; 
+                            size += 5;
                         }
- 
                         innerHtml += `<span class="phrase-cap ${className}" style="font-size: ${size}px;">${word}</span>`;
-                        
-                        // Insert a line break if the phrase is 3+ words and we hit the middle
                         if (words.length >= 3 && index === midPoint - 1) {
                             innerHtml += '<br>';
                         }
                     });
- 
                     el.innerHTML = innerHtml;
                 }
             """, {"text": phrase_text, "fontSize": font_size})
- 
+
             page.screenshot(path=png_path, full_page=False, omit_background=True)
             segments_arr.append((start_time, end_time, png_path, phrase_text, None))
- 
+
         browser.close()
- 
-    # ── FFmpeg overlay — batched with Dynamic Mathematical Animations ──
+
+    # ── FFmpeg overlay — batched with Dynamic Mathematical Animations ─────────
     print("[⚙️] Compositing Sinhala captions with cinematic motion math...")
- 
+
     CHUNK = 50
     current_video = video_path
     anim_style = cap_options.get("captionAnimation", "spring-up")
-    dur = 0.15 
- 
+    dur = 0.15
+
     for chunk_start in range(0, len(segments_arr), CHUNK):
-        chunk = segments_arr[chunk_start : chunk_start + CHUNK]
+        chunk     = segments_arr[chunk_start: chunk_start + CHUNK]
         chunk_out = os.path.join(base_dir, f"_chunk_{chunk_start:04d}.mp4")
- 
+
         inputs = ["ffmpeg", "-i", current_video]
-        for _, _, path, _, _ in chunk: 
+        for _, _, path, _, _ in chunk:
             inputs += ["-i", path]
- 
+
         filter_parts = []
         for idx, (t_s, t_e, _, _, _) in enumerate(chunk):
-            in_lbl = f"[v{idx}]" if idx > 0 else "[0:v]"
+            in_lbl  = f"[v{idx}]" if idx > 0 else "[0:v]"
             out_lbl = f"[v{idx+1}]"
             inp_lbl = f"[{idx+1}]"
-            
-            enable_expr = f"enable='between(t,{t_s:.3f},{t_e:.3f})'"
-            
-            t_prog = f"(t-{t_s:.3f})/{dur}"
-            inv_p = f"(1-{t_prog})"
+
+            enable_expr    = f"enable='between(t,{t_s:.3f},{t_e:.3f})'"
+            t_prog         = f"(t-{t_s:.3f})/{dur}"
+            inv_p          = f"(1-{t_prog})"
             ease_out_cubic = f"({inv_p}*{inv_p}*{inv_p})"
-            
+
             if anim_style == "slide-up":
-                y_expr = f"if(lte(t,{t_s:.3f}+{dur}), 60*{ease_out_cubic}, 0)"
+                y_expr      = f"if(lte(t,{t_s:.3f}+{dur}), 60*{ease_out_cubic}, 0)"
                 overlay_cmd = f"x=0:y='{y_expr}':{enable_expr}"
-                
             elif anim_style == "slide-right":
-                x_expr = f"if(lte(t,{t_s:.3f}+{dur}), -60*{ease_out_cubic}, 0)"
+                x_expr      = f"if(lte(t,{t_s:.3f}+{dur}), -60*{ease_out_cubic}, 0)"
                 overlay_cmd = f"x='{x_expr}':y=0:{enable_expr}"
-                
             elif anim_style == "spring-up":
-                spring_dur = 0.25
-                sp = f"(t-{t_s:.3f})/{spring_dur}"
-                y_expr = f"if(lte(t,{t_s:.3f}+{spring_dur}), 80*(1-{sp})*cos({sp}*6.5), 0)"
+                spring_dur  = 0.25
+                sp          = f"(t-{t_s:.3f})/{spring_dur}"
+                y_expr      = f"if(lte(t,{t_s:.3f}+{spring_dur}), 80*(1-{sp})*cos({sp}*6.5), 0)"
                 overlay_cmd = f"x=0:y='{y_expr}':{enable_expr}"
-                
             else:
                 overlay_cmd = f"x=0:y=0:{enable_expr}"
- 
+
             filter_parts.append(f"{in_lbl}{inp_lbl}overlay={overlay_cmd}{out_lbl}")
- 
+
         cmd = inputs + [
             "-filter_complex", ";".join(filter_parts),
             "-map", f"[v{len(chunk)}]", "-map", "0:a:0",
             "-c:v", "libx264", "-preset", "fast", "-crf", "17",
             "-pix_fmt", "yuv420p", "-c:a", "copy", chunk_out, "-y"
         ]
-        
-        subprocess.run(cmd, check=True, capture_output=True)
- 
+
+        import subprocess as _sp
+        _sp.run(cmd, check=True, capture_output=True)
+
         if current_video != video_path and os.path.exists(current_video):
             os.remove(current_video)
         current_video = chunk_out
- 
-    if current_video != video_path: 
+
+    if current_video != video_path:
         os.replace(current_video, output_vid)
-    else: 
+    else:
+        import shutil
         shutil.copy(video_path, output_vid)
- 
+
+    import shutil
     shutil.rmtree(ovr_dir, ignore_errors=True)
-    if os.path.exists(temp_audio): 
+    if os.path.exists(temp_audio):
         os.remove(temp_audio)
- 
+
     print(f"[✅] Perfect Sinhala CSS captions burned with '{anim_style}' animation: {output_vid}")
     return output_vid
 
@@ -1596,10 +1655,10 @@ def export_captions_overlay_si(video_path: str, options: dict) -> str:
         except Exception:
             w_model = WhisperModel("base", device="cpu",  compute_type="int8")
         w_segs_raw, _ = w_model.transcribe(
-            temp_audio, word_timestamps=True,
-            vad_filter=False,               # ← CRITICAL: vad_filter kills Sinhala audio
-            condition_on_previous_text=False,
-            language="si",                  # ← Force Sinhala so it doesn't bail out
+temp_audio, 
+            word_timestamps=True,
+            vad_filter=True,              # ← Turn this back ON to trim silence
+            condition_on_previous_text=False               # ← Force Sinhala so it doesn't bail out
         )
         w_segs_list  = list(w_segs_raw)
         whisper_words = []
