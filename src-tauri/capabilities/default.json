@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "args": true,
+          "cmd": "../ai_engine/venv/Scripts/python.exe",
+          "name": "run-python"
+        }
+      ]
+    },
+    "dialog:default"
+  ]
+}
