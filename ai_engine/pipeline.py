@@ -582,7 +582,7 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
     import os
 
     # Grab this from Google AI Studio (it's free)
-    api_key = api_key_opt or "AIzaSyAeo8khvjWySFpQp4tVsMQnRLkB1bsFLz0"
+    api_key = api_key_opt or os.environ.get("GEMINI_API_KEY")
     if not api_key or api_key == "YOUR_FREE_API_KEY":
         print("[⚠️] GEMINI_API_KEY not found in environment. Proceeding without forced alignment.")
         return []
@@ -651,31 +651,35 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
 
 def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list) -> list:
     """
-    Time-window alignment — does NOT count words at all.
+    Order-based alignment — maps Gemini phrases onto Whisper timing by SEQUENCE,
+    not by timestamp proximity. Gemini's timestamps are too inaccurate to trust
+    as anchors; only its TEXT and PHRASE ORDER are reliable.
 
     Strategy:
-      1. Gemini gives us a rough time window per phrase (e.g. 1.0s–2.5s).
-         These timestamps drift but the *order* is reliable.
-      2. Whisper gives us accurate per-word timestamps but wrong Sinhala text.
-      3. For each Gemini phrase we:
-           a) Find the Whisper word whose start time is closest to Gemini's
-              start — that becomes our actual_start.
-           b) The actual_end is taken from the Whisper word that sits just
-              before the *next* phrase's start (i.e. we use the gap between
-              phrases as the natural cut point).
-      4. A small minimum display duration (MIN_DUR) prevents flicker on
-         very short phrases.
+      1. Divide the total Whisper timeline proportionally across Gemini phrases
+         based on character count (longer phrases get more time).
+      2. Within each phrase's allocated Whisper window, snap start/end to the
+         nearest actual Whisper word boundary so cuts land on real speech edges.
+      3. Enforce a minimum display duration so short phrases don't flicker.
     """
-    MIN_DUR = 0.40  # seconds — captions show for at least this long
+    MIN_DUR = 0.40
+
+    phrases = [p for p in gemini_phrases if p.get("phrase", "").strip()]
+    if not phrases:
+        return []
 
     if not whisper_words:
-        return [{"phrase": p.get("phrase",""), "start": p["start"], "end": p["end"]}
-                for p in gemini_phrases if p.get("phrase","").strip()]
+        # Fallback: distribute Gemini timestamps evenly
+        return [{"phrase": p["phrase"], "start": p["start"], "end": p["end"]}
+                for p in phrases]
 
-    # Build a flat list of all Whisper start times for fast binary search
+    total_chars = sum(len(p["phrase"]) for p in phrases)
+    total_duration = whisper_words[-1]["end"] - whisper_words[0]["start"]
+    timeline_start = whisper_words[0]["start"]
+
     whisper_starts = [w["start"] for w in whisper_words]
 
-    def nearest_whisper_idx(t: float) -> int:
+    def snap_to_word(t: float) -> int:
         """Return index of the Whisper word whose start is closest to t."""
         import bisect
         pos = bisect.bisect_left(whisper_starts, t)
@@ -683,45 +687,44 @@ def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list) -> list:
             return 0
         if pos >= len(whisper_starts):
             return len(whisper_starts) - 1
-        # Pick whichever neighbour is closer
         before = pos - 1
         if abs(whisper_starts[before] - t) <= abs(whisper_starts[pos] - t):
             return before
         return pos
 
+    # Build proportional time windows for each phrase
+    windows = []
+    cursor = timeline_start
+    for p in phrases:
+        weight = len(p["phrase"]) / total_chars if total_chars > 0 else 1 / len(phrases)
+        duration = total_duration * weight
+        windows.append((cursor, cursor + duration))
+        cursor += duration
+
     aligned = []
-    phrases = [p for p in gemini_phrases if p.get("phrase","").strip()]
+    for i, (phrase_item, (win_start, win_end)) in enumerate(zip(phrases, windows)):
+        phrase = phrase_item["phrase"].strip()
 
-    for i, item in enumerate(phrases):
-        phrase = item["phrase"].strip()
-        g_start = float(item.get("start", 0))
-        g_end   = float(item.get("end",   g_start + 1.0))
+        # Snap window start to nearest Whisper word
+        start_idx = snap_to_word(win_start)
+        actual_start = whisper_words[start_idx]["start"]
 
-        # ── actual_start: nearest Whisper word to Gemini's start ──────
-        snap_idx = nearest_whisper_idx(g_start)
-        actual_start = whisper_words[snap_idx]["start"]
-
-        # ── actual_end: use the Whisper word just before next phrase ──
-        # Look at where the NEXT Gemini phrase starts and find the last
-        # Whisper word that ends before that point. This fills the full
-        # duration of the phrase without over-running into the next one.
-        if i + 1 < len(phrases):
-            next_g_start = float(phrases[i + 1].get("start", g_end))
-            # Find the last Whisper word that starts before next_g_start
-            next_snap_idx = nearest_whisper_idx(next_g_start)
-            # Step back one word so we don't bleed into the next phrase
-            end_word_idx = max(snap_idx, next_snap_idx - 1)
-            actual_end = whisper_words[end_word_idx]["end"]
+        # Snap window end: use the word just before the NEXT window starts
+        if i + 1 < len(windows):
+            next_win_start = windows[i + 1][0]
+            next_idx = snap_to_word(next_win_start)
+            # Step back one word to avoid bleeding into the next phrase
+            end_idx = max(start_idx, next_idx - 1)
+            actual_end = whisper_words[end_idx]["end"]
         else:
-            # Last phrase — use Gemini's end time (nothing after it)
-            # but also clamp against the last Whisper word
-            actual_end = max(g_end, whisper_words[-1]["end"])
+            # Last phrase — run to the end of Whisper's timeline
+            actual_end = whisper_words[-1]["end"]
 
-        # ── enforce minimum display duration ──────────────────────────
+        # Enforce minimum display duration
         if actual_end - actual_start < MIN_DUR:
             actual_end = actual_start + MIN_DUR
 
-        # ── sanity: never go backwards ────────────────────────────────
+        # Never go backwards
         if aligned and actual_start < aligned[-1]["end"]:
             actual_start = aligned[-1]["end"]
             if actual_end - actual_start < MIN_DUR:
@@ -730,7 +733,7 @@ def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list) -> list:
         aligned.append({"phrase": phrase, "start": actual_start, "end": actual_end})
 
         print(f"    [{i+1:02d}] {phrase[:35]:<35}  "
-              f"gemini={g_start:.2f}-{g_end:.2f}s  →  "
+              f"window={win_start:.2f}-{win_end:.2f}s  →  "
               f"snapped={actual_start:.2f}-{actual_end:.2f}s")
 
     return aligned
@@ -770,16 +773,14 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
         except Exception:
             w_model = WhisperModel("base", device="cpu", compute_type="int8")
 
-        # NO language= param — language-agnostic mode gives far more reliable
-        # word-boundary timestamps on Sinhala/mixed audio. We only use the
-        # timestamps; the text content is irrelevant and thrown away.
         w_segments_raw, _ = w_model.transcribe(
             temp_audio,
             word_timestamps=True,
-            vad_filter=True,              # trims silence → tighter boundaries
-            condition_on_previous_text=False
+            vad_filter=True,
+            condition_on_previous_text=False,
+            beam_size=1,                # Fastest — we only need timestamps, not text accuracy
+            no_speech_threshold=0.3,    # More aggressive speech detection on mixed audio
         )
-        # faster-whisper returns a generator — consume it once into a list
         w_segments_list = list(w_segments_raw)
         whisper_words = []
         for seg in w_segments_list:
@@ -787,8 +788,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                 if w.word.strip():
                     whisper_words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
 
-        # If word-level timestamps are too sparse (common on non-Latin audio),
-        # fall back to segment-level boundaries which are always rock-solid
+        # Fallback to segment boundaries if word timestamps are too sparse
         if len(whisper_words) < len(gemini_phrases):
             print(f"[⚠️] Only {len(whisper_words)} word anchors for {len(gemini_phrases)} phrases — using segment boundaries.")
             whisper_words = [{"word": "[seg]", "start": seg.start, "end": seg.end}
@@ -1603,14 +1603,21 @@ def export_captions_overlay_si(video_path: str, options: dict) -> str:
             w_model = WhisperModel("base", device="cpu",  compute_type="int8")
         w_segs_raw, _ = w_model.transcribe(
             temp_audio, word_timestamps=True,
-            vad_filter=True, condition_on_previous_text=False
+            vad_filter=True, condition_on_previous_text=False,
+            beam_size=1,                # Fastest — we only need timestamps, not text accuracy
+            no_speech_threshold=0.3,    # More aggressive speech detection on mixed audio
         )
         w_segs_list  = list(w_segs_raw)
-        whisper_words = [{"word": w.word.strip(), "start": w.start, "end": w.end}
-                         for seg in w_segs_list for w in (seg.words or []) if w.word.strip()]
+        whisper_words = []
+        for seg in w_segs_list:
+            for w in (seg.words or []):
+                if w.word.strip():
+                    whisper_words.append({"word": w.word.strip(), "start": w.start, "end": w.end})
         if len(whisper_words) < len(gemini_phrases):
+            print(f"[⚠️] Only {len(whisper_words)} word anchors for {len(gemini_phrases)} phrases — using segment boundaries.")
             whisper_words = [{"word": "[seg]", "start": seg.start, "end": seg.end}
                              for seg in w_segs_list]
+        print(f"[⚙️] Whisper found {len(whisper_words)} timestamp anchors.")
     except Exception as e:
         print(f"[⚠️] Whisper failed ({e}). Falling back to Gemini timestamps.")
         whisper_words = []
