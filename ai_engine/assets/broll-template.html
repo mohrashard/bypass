@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>B-Roll Template</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Gemunu+Libre:wght@700;800&display=swap"
+        rel="stylesheet" />
+
+    <!-- GSAP + CustomEase -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/CustomEase.min.js"></script>
+
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web@2.1.1/src/index.js"></script>
+
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --accent: #38bdf8;
+            --glow-color: rgba(56, 189, 248, 0.35);
+        }
+
+        html,
+        body {
+            width: 1080px;
+            height: 1920px;
+            overflow: hidden;
+            background: #000;
+        }
+
+        /* ── Stage ── */
+        #stage {
+            position: relative;
+            width: 1080px;
+            height: 1920px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 72px;
+            opacity: 0;
+            /* visibility hidden until injectData() */
+            visibility: hidden;
+            background: radial-gradient(ellipse 110% 80% at 50% 52%, #0f172a 0%, #020617 100%);
+        }
+
+        /* ── Ambient noise layer for cinematic grain ── */
+        #stage::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+            opacity: 0.18;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ── Subtle horizontal scan line ── */
+        #stage::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: repeating-linear-gradient(0deg,
+                    transparent,
+                    transparent 3px,
+                    rgba(0, 0, 0, 0.06) 3px,
+                    rgba(0, 0, 0, 0.06) 4px);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ── Ambient glow orb behind content ── */
+        #glow-orb {
+            position: absolute;
+            width: 820px;
+            height: 820px;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--glow-color) 0%, transparent 70%);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            filter: blur(60px);
+            pointer-events: none;
+            z-index: 1;
+            opacity: 0;
+        }
+
+        /* ── Content wrapper ── */
+        #content {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 72px;
+            width: 100%;
+            padding: 0 80px;
+        }
+
+        /* ── Icon wrapper ── */
+        #icon-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 260px;
+            height: 260px;
+            opacity: 0;
+            transform: scale(0);
+        }
+
+        /* ring around icon */
+        #icon-ring {
+            position: absolute;
+            inset: -18px;
+            border-radius: 50%;
+            border: 2px solid var(--accent);
+            opacity: 0.22;
+            box-shadow: 0 0 48px 8px var(--glow-color);
+        }
+
+        #icon-ring-inner {
+            position: absolute;
+            inset: -8px;
+            border-radius: 50%;
+            border: 1px solid var(--accent);
+            opacity: 0.10;
+        }
+
+        /* Phosphor icon sizing */
+        #icon-wrap i,
+        #icon-wrap ph-icon {
+            font-size: 200px;
+            color: var(--accent);
+            filter: drop-shadow(0 0 28px var(--glow-color)) drop-shadow(0 0 60px var(--glow-color));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+
+        /* ── Text block ── */
+        #text-block {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0;
+            width: 100%;
+            text-align: center;
+        }
+
+        .word-wrap {
+            display: inline-block;
+            overflow: visible;
+            line-height: 1.1;
+        }
+
+        .word {
+            display: inline-block;
+            opacity: 0;
+            filter: blur(14px);
+            transform: translateY(60px);
+            font-size: 108px;
+            font-weight: 900;
+            font-family: 'Montserrat', sans-serif;
+            color: #f1f5f9;
+            letter-spacing: -0.01em;
+            text-transform: uppercase;
+            /* Cinematic text shadow stack */
+            text-shadow:
+                0 0 60px var(--glow-color),
+                0 0 120px var(--glow-color),
+                0 4px 32px rgba(0, 0, 0, 0.7);
+            padding: 0 6px;
+            white-space: nowrap;
+        }
+
+        /* Sinhala override */
+        .word.sinhala {
+            font-family: 'Gemunu Libre', sans-serif;
+            font-weight: 800;
+            font-size: 100px;
+            letter-spacing: 0.02em;
+            text-transform: none;
+        }
+
+        /* Accent word highlight (first word gets a tint) */
+        .word:first-child {
+            color: var(--accent);
+        }
+
+        /* ── Bottom thin line accent ── */
+        #line-accent {
+            position: relative;
+            z-index: 2;
+            width: 0;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+            border-radius: 2px;
+            box-shadow: 0 0 24px 4px var(--glow-color);
+            opacity: 0;
+            margin-top: -32px;
+        }
+
+        /* ── Corner marks (cinematic frame) ── */
+        .corner {
+            position: absolute;
+            width: 48px;
+            height: 48px;
+            opacity: 0;
+            z-index: 3;
+        }
+
+        .corner::before,
+        .corner::after {
+            content: '';
+            position: absolute;
+            background: var(--accent);
+            opacity: 0.5;
+        }
+
+        .corner::before {
+            width: 100%;
+            height: 2px;
+            top: 0;
+            left: 0;
+        }
+
+        .corner::after {
+            width: 2px;
+            height: 100%;
+            top: 0;
+            left: 0;
+        }
+
+        #c-tl {
+            top: 60px;
+            left: 60px;
+        }
+
+        #c-tr {
+            top: 60px;
+            right: 60px;
+            transform: scaleX(-1);
+        }
+
+        #c-bl {
+            bottom: 60px;
+            left: 60px;
+            transform: scaleY(-1);
+        }
+
+        #c-br {
+            bottom: 60px;
+            right: 60px;
+            transform: scale(-1);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="stage">
+        <!-- Ambient glow -->
+        <div id="glow-orb"></div>
+
+        <!-- Cinematic corners -->
+        <div class="corner" id="c-tl"></div>
+        <div class="corner" id="c-tr"></div>
+        <div class="corner" id="c-bl"></div>
+        <div class="corner" id="c-br"></div>
+
+        <!-- Main content -->
+        <div id="content">
+            <div id="icon-wrap">
+                <div id="icon-ring"></div>
+                <div id="icon-ring-inner"></div>
+                <!-- icon injected here -->
+            </div>
+
+            <div id="text-block">
+                <!-- words injected here -->
+            </div>
+
+            <div id="line-accent"></div>
+        </div>
+    </div>
+
+    <script>
+        // ── Helpers ──────────────────────────────────────────────────────────────
+
+        function isSinhala(str) {
+            return /[\u0D80-\u0DFF]/.test(str);
+        }
+
+        function buildWordSpans(text) {
+            const block = document.getElementById('text-block');
+            block.innerHTML = '';
+
+            // Split on spaces; preserve newline hints via \n
+            const lines = text.split('\n');
+            lines.forEach((line, li) => {
+                const words = line.trim().split(/\s+/);
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'word-wrap';
+
+                words.forEach((word, wi) => {
+                    const span = document.createElement('span');
+                    span.className = 'word' + (isSinhala(word) ? ' sinhala' : '');
+                    span.textContent = word + (wi < words.length - 1 ? '\u00A0' : '');
+                    lineDiv.appendChild(span);
+                });
+
+                block.appendChild(lineDiv);
+                if (li < lines.length - 1) block.appendChild(document.createElement('br'));
+            });
+
+            return document.querySelectorAll('.word');
+        }
+
+        function buildIcon(iconName) {
+            const wrap = document.getElementById('icon-wrap');
+            // Remove old icon if re-called
+            wrap.querySelectorAll('i').forEach(el => el.remove());
+            const ico = document.createElement('i');
+            // Phosphor uses class pattern: ph-bold ph-{name}
+            ico.className = `ph-bold ph-${iconName}`;
+            wrap.appendChild(ico);
+        }
+
+        // ── Main API ─────────────────────────────────────────────────────────────
+
+        /**
+         * window.injectData(text, iconName, themeColor, durationSec)
+         *
+         * @param {string} text        - Display text (use \n for line breaks)
+         * @param {string} iconName    - Phosphor icon name e.g. "rocket", "lightning", "chart-line-up"
+         * @param {string} themeColor  - Hex accent color e.g. "#38bdf8"
+         * @param {number} durationSec - Total clip duration in seconds
+         */
+        window.injectData = function (text, iconName, themeColor, durationSec) {
+
+            // ── Apply theme colour ──────────────────────────────────────────────
+            const root = document.documentElement;
+            const accent = themeColor || '#38bdf8';
+            const glowAlpha = hexToRgba(accent, 0.35);
+            root.style.setProperty('--accent', accent);
+            root.style.setProperty('--glow-color', glowAlpha);
+
+            // ── Build DOM ───────────────────────────────────────────────────────
+            buildIcon(iconName || 'star');
+            const words = buildWordSpans(text || 'YOUR TEXT HERE');
+
+            // ── Reveal stage ────────────────────────────────────────────────────
+            const stage = document.getElementById('stage');
+            stage.style.visibility = 'visible';
+
+            // ── GSAP Timeline ───────────────────────────────────────────────────
+            const dur = durationSec || 5;
+            const outStart = dur - 0.55;
+
+            // ── NEW: Real-Time Playback for Native Screen Recording ──
+            const tl = gsap.timeline({ defaults: { ease: 'none' } });
+
+            // 0. Fade stage in instantly
+            tl.to(stage, { opacity: 1, duration: 0.01 });
+
+            // 1a. Glow orb blooms in
+            tl.to('#glow-orb', {
+                opacity: 1, duration: 0.8, ease: 'power2.out'
+            }, 0);
+
+            // 1b. Cinematic corners slide in
+            tl.to('.corner', {
+                opacity: 1, duration: 0.4, stagger: 0.08, ease: 'power2.out'
+            }, 0.1);
+
+            // 2. Icon pops in with back.out bounce
+            tl.to('#icon-wrap', {
+                scale: 1, opacity: 1, duration: 0.75, ease: 'back.out(1.7)'
+            }, 0.15);
+
+            // 3. Words drop in staggered — blur + Y slide
+            tl.to(Array.from(words), {
+                opacity: 1,
+                filter: 'blur(0px)',
+                y: 0,
+                duration: 0.65,
+                stagger: 0.10,
+                ease: 'power4.out'
+            }, 0.45);
+
+            // 4. Accent line sweeps in
+            tl.to('#line-accent', {
+                width: 420, opacity: 1, duration: 0.6, ease: 'power3.out'
+            }, 0.75);
+
+            // 5. Float loop (subtle sine on icon + text block)
+            const floatTl = gsap.timeline({ repeat: -1, yoyo: true, ease: 'sine.inOut' });
+            floatTl.to('#icon-wrap', { y: -18, duration: 2.6 }, 0);
+            floatTl.to('#text-block', { y: -10, duration: 2.6 }, 0);
+            floatTl.to('#line-accent', { y: -10, duration: 2.6 }, 0);
+
+            // Delay float start until elements are in
+            gsap.delayedCall(1.1, () => floatTl.play());
+
+            // 6. Out — scale-down + fade to black
+            tl.to(['#icon-wrap', '#text-block', '#line-accent'], {
+                scale: 0.88,
+                opacity: 0,
+                filter: 'blur(8px)',
+                duration: 0.45,
+                ease: 'power3.in',
+                stagger: 0
+            }, outStart);
+
+            tl.to('#glow-orb', {
+                opacity: 0, duration: 0.45, ease: 'power2.in'
+            }, outStart);
+
+            tl.to('.corner', {
+                opacity: 0, duration: 0.3, ease: 'power2.in'
+            }, outStart);
+
+            tl.to(stage, {
+                opacity: 0, duration: 0.4, ease: 'power2.in'
+            }, outStart + 0.1);
+        };
+
+        // ── Utility ───────────────────────────────────────────────────────────
+
+        function hexToRgba(hex, alpha) {
+            let h = hex.replace('#', '');
+            if (h.length === 3) h = h.split('').map(c => c + c).join('');
+            const r = parseInt(h.substring(0, 2), 16);
+            const g = parseInt(h.substring(2, 4), 16);
+            const b = parseInt(h.substring(4, 6), 16);
+            return `rgba(${r},${g},${b},${alpha})`;
+        }
+    </script>
+</body>
+
+</html>

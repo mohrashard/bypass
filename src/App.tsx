@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
+import NexusTab from './NexusTab';
 
 const NOISE_PATTERNS = [
   /UserWarning/, /FutureWarning/, /DeprecationWarning/,
@@ -14,6 +15,7 @@ function isNoisyLine(line: string): boolean {
 
 const OPTIONS_META: Record<string, string> = {
   removeSilence: '✂️ Remove Dead Air',
+  aiBroll: '🎥 AI Contextual B-Roll', // 👈 NEW
   burnCaptions: '📝 Burn Viral Captions',
   studioAudio: '🎙️ Studio Audio Enhancer',
   blurBackground: '🌫️ AI Background FX',
@@ -29,12 +31,14 @@ export default function App() {
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isPreviewVertical, setIsPreviewVertical] = useState(false);
   const [isExportingOverlay, setIsExportingOverlay] = useState(false);
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
   const [options, setOptions] = useState({
     removeSilence: true,
+    aiBroll: false, // 👈 NEW
     burnCaptions: false,
     studioAudio: false,
     blurBackground: false,
@@ -58,6 +62,7 @@ export default function App() {
 
     captionAnimation: 'spring-up',
     captionLanguage: 'en',
+    captionBottomPercent: 22,
     geminiApiKey: '',
 
     bgMode: 'blur',
@@ -447,6 +452,72 @@ export default function App() {
                             </select>
                           </div>
 
+                          {/* ── NEW: CAPTION POSITION PREVIEW ── */}
+                          <div className="border-t border-zinc-800/50 pt-3 mt-2 mb-2 flex flex-col gap-2">
+                            
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-3">
+                                <span className="text-xs text-sky-400 font-semibold uppercase tracking-wider">Position Preview</span>
+                                {/* ── NEW: Aspect Ratio Toggle Button ── */}
+                                <button 
+                                  onClick={(e) => {
+                                      e.preventDefault(); 
+                                      setIsPreviewVertical(!isPreviewVertical);
+                                  }}
+                                  className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-300 transition-colors border border-zinc-600 flex items-center gap-1.5 shadow-sm active:scale-95"
+                                >
+                                  {isPreviewVertical ? '📱 9:16 View' : '🖥️ 16:9 View'}
+                                </button>
+                              </div>
+                              <span className="text-xs text-zinc-400 font-mono">{options.captionBottomPercent}% from bottom</span>
+                            </div>
+                            
+                            {/* ── UPDATED: Dynamic Container that morphs shape ── */}
+                            <div className={`relative bg-black rounded-lg overflow-hidden border border-zinc-700 group pointer-events-none mx-auto transition-all duration-300 ease-in-out ${
+                              isPreviewVertical ? 'w-48 h-[340px]' : 'w-full h-44'
+                            }`}>
+                              {selectedFilePath ? (
+                                <video 
+                                  key={selectedFilePath}
+                                  src={convertFileSrc(selectedFilePath)}
+                                  className="w-full h-full object-cover opacity-60"
+                                  preload="auto"
+                                  muted
+                                  playsInline
+                                  onLoadedMetadata={(e) => {
+                                    e.currentTarget.currentTime = 2.0; 
+                                  }}
+                                />
+                              ) : (
+                                <div className="w-full h-full flex flex-col items-center justify-center text-zinc-600 space-y-2">
+                                  <span className="text-2xl">🖼️</span>
+                                  <span className="text-[10px] uppercase tracking-wider font-semibold">Awaiting Video</span>
+                                </div>
+                              )}
+                              
+                              {/* The Floating Preview Tag */}
+                              <div 
+                                className="absolute left-0 right-0 flex justify-center w-full transition-all duration-75 ease-out"
+                                style={{ bottom: `${options.captionBottomPercent}%` }}
+                              >
+                                <div className="bg-zinc-900/80 backdrop-blur-md border border-zinc-600 text-white px-4 py-1.5 rounded-md shadow-2xl font-bold text-[11px] uppercase tracking-widest whitespace-nowrap">
+                                  {options.captionLanguage === 'si' ? 'සිංහල කැප්ෂන්' : 'Viral Caption Preview'}
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="flex items-center gap-3 mt-2">
+                              <span className="text-[10px] text-zinc-500 font-medium tracking-wider">BOTTOM</span>
+                              <input 
+                                type="range" min="5" max="90" 
+                                value={options.captionBottomPercent}
+                                onChange={(e) => setOptions((prev) => ({ ...prev, captionBottomPercent: parseInt(e.target.value) }))}
+                                className="flex-1 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                              />
+                              <span className="text-[10px] text-zinc-500 font-medium tracking-wider">TOP</span>
+                            </div>
+                          </div>
+
                           <div className="border-t border-zinc-800/50 pt-3 mt-1 flex flex-col gap-2">
                             <label className="flex items-center gap-2 cursor-pointer mb-1 group">
                               <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${options.greenScreenOverlay ? 'bg-emerald-500 border-emerald-500' : 'bg-zinc-900 border-zinc-700 group-hover:border-zinc-500'
@@ -494,6 +565,23 @@ export default function App() {
                             )}
                           </div>
 
+                        </div>
+                      )}
+
+                      {key === 'aiBroll' && options.aiBroll && (
+                        <div className="flex flex-col gap-3 p-3 ml-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
+                          <div className="text-xs text-zinc-400 italic border-b border-zinc-800/50 pb-2">
+                            Gemini acts as the AI Director: it scans your audio, finds the highest-impact moments, and generates cinematic kinetic typography B-roll overlays exactly when needed.
+                          </div>
+                          
+                          {/* Gemini Key is strictly required for this to work */}
+                          <div className="flex flex-col gap-1 mt-1">
+                            <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">Gemini API Key (Required)</span>
+                            <input type="password" placeholder="Paste Google AI Studio Key..."
+                              value={options.geminiApiKey}
+                              onChange={(e) => setOptions((prev) => ({ ...prev, geminiApiKey: e.target.value }))}
+                              className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1.5 outline-none focus:border-orange-500 w-full" />
+                          </div>
                         </div>
                       )}
 
@@ -556,11 +644,7 @@ export default function App() {
             </>
           )}
 
-          {activeTab === 'nexus' && (
-            <div className="text-center py-24 text-zinc-600 text-sm">
-              Nexus Studio — coming soon
-            </div>
-          )}
+          {activeTab === 'nexus' && <NexusTab />}
         </div>
       </div>
     </main>

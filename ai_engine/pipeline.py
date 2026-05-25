@@ -6,7 +6,8 @@ import io
 import warnings
 import pathlib
 from dotenv import load_dotenv
-load_dotenv()
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+load_dotenv(dotenv_path=env_path)
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageChops
 
 # ─── Windows Fix ─────────────────────────────
@@ -98,55 +99,91 @@ def process_with_ai_stack(input_wav_path: str, output_wav_path: str) -> None:
 # 2. THE SILENCE CHOPPER
 # ─────────────────────────────────────────────
 
-def stage_remove_silence(video_path: str) -> str:
+def stage_remove_silence(video_path: str, options: dict = None) -> str:
     from pydub import AudioSegment
     from pydub.silence import detect_nonsilent
+    import json
+    import subprocess
+    import os
 
-    print("[⚙️] Extracting audio for silence detection...")
+    print("[⚙️] Analyzing waveforms for cinematic algorithmic cuts...")
     base_dir = os.path.dirname(os.path.abspath(video_path))
     temp_wav = os.path.join(base_dir, "_silence_detect.wav")
     output_vid = os.path.splitext(video_path)[0] + "_chopped.mp4"
-    list_file = os.path.join(base_dir, "_concat_list.txt")
+    script_path = os.path.join(base_dir, "_filter_script.txt")
 
     subprocess.run(
         ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", temp_wav, "-y"],
         check=True, capture_output=True
     )
 
-    print("[⚙️] Analyzing waveforms...")
     audio = AudioSegment.from_wav(temp_wav)
-    
-    # Detect the parts where people are ACTUALLY talking
+    # Using 400ms min silence to avoid cutting mid-breath
     nonsilent_chunks = detect_nonsilent(audio, min_silence_len=400, silence_thresh=-42)
-    
-    print(f"[🎬] Found {len(nonsilent_chunks)} active video segments. Slicing...")
 
-    # Write the FFmpeg concat demuxer file
-    with open(list_file, "w", encoding="utf-8") as f:
-        for start_ms, end_ms in nonsilent_chunks:
-            # Add a tiny 100ms padding so words don't get abruptly cut off
-            start_sec = max(0, (start_ms - 100) / 1000.0)
-            end_sec = (end_ms + 100) / 1000.0
-            
-            # Format the absolute path cleanly for FFmpeg on Windows
-            safe_path = video_path.replace('\\', '/')
-            f.write(f"file '{safe_path}'\n")
-            f.write(f"inpoint {start_sec:.3f}\n")
-            f.write(f"outpoint {end_sec:.3f}\n")
+    if not nonsilent_chunks:
+        if os.path.exists(temp_wav): os.remove(temp_wav)
+        return video_path
 
-    print("[⚙️] Re-compiling video (Fast Render)...")
-    # We use a fast h264 preset here to ensure exact frame-accurate cuts
+    print(f"[🎬] Found {len(nonsilent_chunks)} active segments. Generating V-Fades & Camera Angles...")
+
+    # Extract exact dimensions and sample rate to prevent concat crashes
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "json", video_path],
+        capture_output=True, text=True
+    )
+    info = json.loads(probe.stdout)["streams"][0]
+    W, H = int(info["width"]), int(info["height"])
+
+    filter_lines = []
+    concat_v = ""
+    concat_a = ""
+
+    for i, (start_ms, end_ms) in enumerate(nonsilent_chunks):
+        # 1. Expand the audio envelope slightly for a smoother J-Cut breathing feel
+        start_sec = max(0, (start_ms - 150) / 1000.0) 
+        end_sec = (end_ms + 100) / 1000.0
+        dur = end_sec - start_sec
+
+        # 2. VISUAL: The Algorithmic Camera Switch 
+        # Punch in 15% on alternating clips to mask the jump cut
+        v_base = f"[0:v]trim=start={start_sec:.3f}:end={end_sec:.3f},setpts=PTS-STARTPTS"
+        if i % 2 == 1:
+            v_filter = f"{v_base},crop=iw/1.15:ih/1.15,scale={W}:{H},setsar=1[v{i}];"
+        else:
+            v_filter = f"{v_base},setsar=1[v{i}];"
+
+        # 3. AUDIO: The Anti-Click V-Fade
+        # 40ms micro-crossfades kill all popping/clicking from hard cuts
+        a_filter = f"[0:a]atrim=start={start_sec:.3f}:end={end_sec:.3f},asetpts=PTS-STARTPTS," \
+                   f"afade=t=in:st=0:d=0.04,afade=t=out:st={dur-0.04:.3f}:d=0.04[a{i}];"
+
+        filter_lines.append(v_filter)
+        filter_lines.append(a_filter)
+        concat_v += f"[v{i}][a{i}]"
+
+    # Bundle everything into the master concat filter
+    filter_lines.append(f"{concat_v}concat=n={len(nonsilent_chunks)}:v=1:a=1[outv][outa]")
+
+    # Bypass Windows CLI string limits by saving the massive command to a text file
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(filter_lines))
+
+    print("[⚙️] Rendering master timeline via filter_complex script...")
     subprocess.run([
-        "ffmpeg", "-f", "concat", "-safe", "0", "-i", list_file,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18", 
-        "-c:a", "aac", "-b:a", "192k", 
+        "ffmpeg", "-i", video_path,
+        "-filter_complex_script", script_path,
+        "-map", "[outv]", "-map", "[outa]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k",
         output_vid, "-y"
     ], check=True, capture_output=True)
 
-    for f in [temp_wav, list_file]:
+    for f in [temp_wav, script_path]:
         if os.path.exists(f): os.remove(f)
 
-    print(f"[✅] Dead air eliminated: {output_vid}")
+    print(f"[✅] Cinematic Jump Cuts applied: {output_vid}")
     return output_vid
 
 # ─────────────────────────────────────────────
@@ -247,6 +284,9 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
     font_family = cap_options.get("captionFont", "Montserrat")
     p_class = cap_options.get("captionPrimaryStyle", "p-glass-silver")
     s_class = cap_options.get("captionSecondaryStyle", "s-hormozi-yellow")
+
+    # NEW: Grab the percentage and convert to decimal
+    cap_bottom_pct = float(cap_options.get("captionBottomPercent", 22)) / 100.0
  
     # ── Whisper transcription ──────────────────────────────────
     temp_audio = os.path.join(base_dir, "_whisper_audio.wav")
@@ -303,7 +343,7 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
     background: transparent; overflow: hidden;
   }}
   .caption-wrap {{
-    position: absolute; bottom: {int(height * 0.22)}px;
+    position: absolute; bottom: {int(height * cap_bottom_pct)}px;
     left: 0; right: 0; display: flex; align-items: baseline;
     flex-wrap: wrap; justify-content: center; padding: 0 {int(width * 0.05)}px;
   }}
@@ -584,17 +624,21 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
     import time
     import json
     import os
+    from dotenv import load_dotenv
+
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+    load_dotenv(os.path.join(engine_dir, ".env"))
  
     # Grab this from Google AI Studio (it's free)
     api_key = api_key_opt or os.getenv("GEMINI_API_KEY")
     if not api_key or api_key == "YOUR_FREE_API_KEY":
         print("[⚠️] GEMINI_API_KEY not found in environment. Proceeding without forced alignment.")
         return []
-    
-    genai.configure(api_key=api_key)
-    print("[⚙️] Uploading audio to Gemini API...")
-    
-    try:
+
+    def _run_gemini(current_key):
+        genai.configure(api_key=current_key)
+        print("[⚙️] Uploading audio to Gemini API...")
+        
         # 1. Upload the extracted .wav file to Gemini
         audio_file = genai.upload_file(path=audio_path)
         
@@ -608,8 +652,6 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
         # 3. Use Gemini Flash Latest (Universal free tier fallback)
         model = genai.GenerativeModel('gemini-flash-latest')
  
-        # 4. The strict prompt to prevent hallucination and force formatting
-        # 4. The strict prompt to prevent hallucination and force formatting
         # 4. The strict prompt to prevent hallucination and force formatting
         prompt = """
         Listen to this audio. It is a mix of Sinhala and English (Singlish).
@@ -662,9 +704,22 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
         # --------------------------------------------------
  
         return word_list
+
+    try:
+        return _run_gemini(api_key)
     except Exception as e:
-        print(f"[❌] Gemini API Error: {e}")
-        return []
+        print(f"[❌] Gemini API Error with primary key: {e}")
+        bypass_key = os.getenv("GEMINI_API_KEY_BYPASS")
+        if bypass_key:
+            print("[⚙️] Retrying with GEMINI_API_KEY_BYPASS...")
+            try:
+                return _run_gemini(bypass_key)
+            except Exception as e2:
+                print(f"[❌] Gemini API Error with bypass key as well: {e2}")
+                return []
+        else:
+            print("[❌] No bypass key found. Aborting.")
+            return []
  
 # ─────────────────────────────────────────────────────────────────────────────
 # DROP-IN REPLACEMENT: align_phrases_to_whisper + stage_burn_sinhala_captions
@@ -811,6 +866,9 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     si_pri_class  = cap_options.get("siPrimaryStyle", "si-pri-silver")
     si_sec_class  = cap_options.get("siSecondaryStyle", "si-sec-gold")
 
+    # NEW
+    cap_bottom_pct = float(cap_options.get("captionBottomPercent", 22)) / 100.0
+
     # 1. Extract Audio
     temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
     subprocess.run(
@@ -904,12 +962,13 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
             for p in gemini_phrases
         ]
 
-    # ── NEW: Extract your Full-Stops for the Transition Engine ──
+    # ── NEW: Extract the Director's Cuts (|) for the Transition Engine ──
     flash_times = []
     for i, item in enumerate(segments_data):
         phrase_text = str(item.get("phrase", ""))
-        # If the AI marked this phrase with a full stop or question mark
-        if "." in phrase_text or "?" in phrase_text or "!" in phrase_text:
+        
+        # Look for the pipe symbol Gemini dropped
+        if "|" in phrase_text:
             # We want the transition to hit exactly as the NEXT sentence starts
             if i + 1 < len(segments_data):
                 flash_times.append(float(segments_data[i+1]["start"]))
@@ -936,7 +995,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   html, body {{ width: {width}px; height: {height}px; background: transparent; overflow: hidden; }}
   .caption-wrap {{
-    position: absolute; bottom: {int(height * 0.22)}px; left: 0; right: 0;
+    position: absolute; bottom: {int(height * cap_bottom_pct)}px; left: 0; right: 0;
     padding: 0 {int(width * 0.08)}px;
     text-align: center;
   }}
@@ -1975,6 +2034,191 @@ def stage_hardcode_flash(video_path: str, options: dict) -> str:
         return video_path
 
 
+# ─────────────────────────────────────────────
+# 12. AI CONTEXTUAL B-ROLL ENGINE (Native Playwright Record)
+# ─────────────────────────────────────────────
+
+def stage_ai_broll(video_path: str, options: dict) -> str:
+    import os
+    import json
+    import time
+    import shutil
+    import subprocess
+    import google.generativeai as genai
+    from playwright.sync_api import sync_playwright
+
+    print("[⚙️] Booting AI B-Roll Director Engine (Real-Time Record Mode)...")
+    api_key = options.get("geminiApiKey") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("[❌] FATAL: Gemini API Key required for AI B-Roll.")
+        return video_path
+
+    base_dir = os.path.dirname(os.path.abspath(video_path))
+    temp_audio = os.path.join(base_dir, "_broll_audio.wav")
+    output_vid = os.path.splitext(video_path)[0] + "_with_broll.mp4"
+    
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+    template_path = os.path.join(engine_dir, "assets", "broll-template.html")
+
+    if not os.path.exists(template_path):
+        print(f"[❌] FATAL: Template not found at {template_path}")
+        return video_path
+
+    # 1. Extract Audio & Get Gemini Data
+    subprocess.run(["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", temp_audio, "-y"], check=True, capture_output=True)
+
+    def _run_broll_gemini(current_key):
+        genai.configure(api_key=current_key)
+        print("[⚙️] Uploading audio to Gemini for structural analysis...")
+        audio_file = genai.upload_file(path=temp_audio)
+        
+        while audio_file.state.name == "PROCESSING":
+            time.sleep(2)
+            audio_file = genai.get_file(audio_file.name)
+
+        prompt = """
+        Listen to this audio. Act as a high-end YouTube Video Editor.
+        Identify EXACTLY 1 or 2 highly impactful 'hook' moments in the speech.
+        For each moment, design a cinematic kinetic typography B-Roll screen.
+        
+        Return a JSON array of objects. EACH OBJECT MUST HAVE:
+        - text: 2 to 4 words summarizing the moment. Use \\n for a line break.
+        - icon: A Phosphor icon name (e.g., "lightning", "money", "rocket").
+        - color: A vibrant hex color (e.g., "#ef4444", "#10b981").
+        - start: Exact start time of the phrase in seconds.
+        - duration: How long the B-Roll stays on screen (between 2.5 and 4.0 seconds).
+        
+        Output strictly as raw JSON.
+        """
+        print("[⚙️] AI Director is choosing the B-Roll moments...")
+        model = genai.GenerativeModel('gemini-flash-latest')
+        response = model.generate_content([prompt, audio_file], generation_config={"response_mime_type": "application/json"})
+        genai.delete_file(audio_file.name)
+
+        clean_text = response.text.replace('```json', '').replace('```', '').strip()
+        moments = json.loads(clean_text)
+        print(f"[🎬] AI Director found {len(moments)} key moments.")
+        return moments
+
+    broll_moments = None
+    if api_key:
+        try:
+            broll_moments = _run_broll_gemini(api_key)
+        except Exception as e:
+            print(f"[⚠️] Gemini API Error with primary key: {e}")
+            from dotenv import load_dotenv
+            load_dotenv(os.path.join(engine_dir, ".env")) # Ensure fresh keys
+            bypass_key = os.getenv("GEMINI_API_KEY_BYPASS")
+            if bypass_key:
+                print("[⚙️] Retrying with GEMINI_API_KEY_BYPASS...")
+                try:
+                    broll_moments = _run_broll_gemini(bypass_key)
+                except Exception as e2:
+                    print(f"[❌] Gemini API Error with bypass key as well: {e2}")
+            else:
+                print("[❌] No bypass key found.")
+
+    if not broll_moments:
+        return video_path
+
+    # 2. RECORD VIDEO NATIVELY VIA PLAYWRIGHT
+    broll_video_files = []
+    playwright_vid_dir = os.path.join(base_dir, "_playwright_vids")
+    os.makedirs(playwright_vid_dir, exist_ok=True)
+    
+    with sync_playwright() as p:
+        # Launch with hardware acceleration
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--enable-gpu", "--use-gl=egl", "--mute-audio"]
+        )
+        
+        # ── THE MAGIC: Tell Playwright to natively record the screen to .webm ──
+        context = browser.new_context(
+            viewport={"width": 1080, "height": 1920},
+            device_scale_factor=1,
+            record_video_dir=playwright_vid_dir,
+            record_video_size={"width": 1080, "height": 1920}
+        )
+        
+        for idx, moment in enumerate(broll_moments):
+            print(f"  ↳ Recording Template {idx+1}: '{moment['text'].replace(chr(10), ' ')}'")
+            page = context.new_page()
+            
+            # Load the file, wait for fonts
+            page.goto(f"file://{os.path.abspath(template_path)}")
+            page.wait_for_load_state("networkidle")
+
+            dur = float(moment.get("duration", 3.0))
+            
+            # Trigger the animation
+            page.evaluate(f"""
+                window.injectData(
+                    `{moment['text']}`, '{moment['icon']}', '{moment['color']}', {dur}
+                );
+            """)
+
+            # ── The Engine just waits while Chromium records itself ──
+            print(f"    [⏳] Recording {dur} seconds of video in real-time...")
+            page.wait_for_timeout(int(dur * 1000))
+            
+            # Closing the page flushes the video file to disk
+            page.close()
+            
+            # Playwright saves it with a random hash name. We grab it and rename it.
+            recorded_vid_path = page.video.path()
+            final_clip_path = os.path.join(base_dir, f"_broll_clip_{idx}.webm")
+            os.rename(recorded_vid_path, final_clip_path)
+            
+            broll_video_files.append({"path": final_clip_path, "start": float(moment["start"]), "dur": dur})
+
+        browser.close()
+
+    # 3. Composite the B-Roll clips over the main video timeline
+    print("[⚙️] Compositing B-Roll layers into main timeline...")
+    
+    inputs_cmd = ["ffmpeg", "-i", video_path]
+    for b in broll_video_files:
+        inputs_cmd += ["-i", b["path"]]
+
+    filter_complex = ""
+    last_out = "[0:v]"
+    
+    for idx, b in enumerate(broll_video_files):
+        stream_idx = idx + 1
+        start_t = b["start"]
+        dur_t = b["dur"]
+        
+        shifted_lbl = f"[broll_{idx}_shifted]"
+        filter_complex += f"[{stream_idx}:v]setpts=PTS-STARTPTS+{start_t}/TB{shifted_lbl};"
+        
+        out_lbl = f"[v_out_{idx}]"
+        filter_complex += f"{last_out}{shifted_lbl}overlay=enable='between(t,{start_t},{start_t}+{dur_t})':eof_action=pass{out_lbl};"
+        last_out = out_lbl
+
+    filter_complex = filter_complex.rstrip(';')
+
+    cmd = inputs_cmd + [
+        "-filter_complex", filter_complex,
+        "-map", last_out,
+        "-map", "0:a", 
+        "-c:v", "libx264", "-preset", "fast", "-crf", "17",
+        "-pix_fmt", "yuv420p", "-c:a", "copy",
+        output_vid, "-y"
+    ]
+    
+    subprocess.run(cmd, check=True, capture_output=True)
+
+    # Clean up temp clips and the Playwright recording directory
+    for b in broll_video_files:
+        if os.path.exists(b["path"]): os.remove(b["path"])
+    shutil.rmtree(playwright_vid_dir, ignore_errors=True)
+    if os.path.exists(temp_audio): os.remove(temp_audio)
+
+    print(f"[✅] AI Contextual B-Roll injected: {output_vid}")
+    return output_vid
+
+
 def run_pipeline(video_path: str, options_json: str) -> None:
     options = json.loads(options_json)
     print(f"\n[🎬] STARTING LOCAL RENDER ENGINE: {os.path.basename(video_path)}\n")
@@ -1991,7 +2235,11 @@ def run_pipeline(video_path: str, options_json: str) -> None:
     # 2. Enhance the audio on the chopped clip
     # 3. Bake the color grade last — audio is already locked via -c:a copy
     if options.get("removeSilence"):
-        current_video = stage_remove_silence(current_video)
+        current_video = stage_remove_silence(current_video, options)
+
+    # ── NEW: AI Director injects the GSAP B-Roll ──
+    if options.get("aiBroll"):
+        current_video = stage_ai_broll(current_video, options)
 
     if options.get("studioAudio"):
         current_video = stage_studio_audio(current_video)
