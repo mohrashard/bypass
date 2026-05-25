@@ -68,6 +68,7 @@ export default function App() {
     captionFont: 'Montserrat',
     captionPrimaryStyle: 'p-clean-white',
     captionSecondaryStyle: 's-hormozi-yellow',
+    captionMixedStyle: false,
 
     // ── NEW: Sinhala Template Defaults ──
     siMainStyle: 'si-main-blue',
@@ -417,6 +418,19 @@ export default function App() {
                                 <option value="s-luxury-gold">5. Luxury Metallic Gold</option>
                                 <option value="none">Disable Highlights</option>
                               </select>
+                            </div>
+                            <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-800/50">
+                              <div className="flex flex-col">
+                                <span className="text-xs text-zinc-400 font-medium">Kinematic Mixed Style</span>
+                                <span className="text-[10px] text-zinc-500">Auto-styles words by role (TikTok style)</span>
+                              </div>
+                              <label className="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" className="sr-only peer"
+                                  checked={options.captionMixedStyle}
+                                  onChange={() => toggleOption('captionMixedStyle')} 
+                                />
+                                <div className="w-9 h-5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                              </label>
                             </div>
                           </>
                         )}
