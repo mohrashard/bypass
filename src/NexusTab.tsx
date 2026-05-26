@@ -131,7 +131,6 @@ export default function NexusTab() {
   });
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const previewRef = useRef<HTMLIFrameElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -224,12 +223,6 @@ export default function NexusTab() {
   const forceRefresh = () => setPreviewHtml(html + ' ');
 
   // ── Preview scale to fit panel ─────────────────────────────────────────
-  const previewScale = Math.min(
-    1,
-    // rough panel width / render width — CSS handles the rest
-    540 / renderOptions.width,
-  );
-  const aspectRatio = renderOptions.height / renderOptions.width;
 
   return (
     <div className="flex-1 flex flex-col min-h-0 w-full overflow-hidden" style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace" }}>

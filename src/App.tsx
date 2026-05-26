@@ -16,7 +16,6 @@ function isNoisyLine(line: string): boolean {
 const OPTIONS_META: Record<string, string> = {
   extractMp3: '🎵 Extract MP3 Audio',
   removeSilence: '✂️ Remove Dead Air',
-  aiBroll: '🎥 AI Contextual B-Roll', // 👈 NEW
   burnCaptions: '📝 Burn Viral Captions',
   studioAudio: '🎙️ Studio Audio Enhancer',
   maskEngine: '🎭 Video Masking Engine', // <-- Add this line
@@ -34,7 +33,6 @@ export default function App() {
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPreviewVertical, setIsPreviewVertical] = useState(false);
-  const [isExportingOverlay, setIsExportingOverlay] = useState(false);
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
@@ -52,7 +50,6 @@ export default function App() {
     maskBgImagePath: '',
     maskBgImageName: '',
     removeSilence: true,
-    aiBroll: false, // 👈 NEW
     burnCaptions: false,
     studioAudio: false,
     blurBackground: false,
@@ -66,8 +63,8 @@ export default function App() {
     glowColor: '#000000',
 
     captionFont: 'Montserrat',
-    captionPrimaryStyle: 'p-clean-white',
-    captionSecondaryStyle: 's-hormozi-yellow',
+    captionPrimaryStyle: 'p-silver-translucent',
+    captionSecondaryStyle: 's-dark-blue-glow',
     captionMixedStyle: false,
 
     // ── NEW: Sinhala Template Defaults ──
@@ -86,9 +83,6 @@ export default function App() {
     bgImageName: '',
     keyingMode: 'ai',
     colorGradeStyle: 'pro-max',
-
-    exportCaptionOverlay: false,
-    greenScreenOverlay: true,
   });
 
   useEffect(() => {
@@ -165,7 +159,7 @@ export default function App() {
       await invoke<string>('run_python_engine', {
         videoPath: selectedFilePath,
         processType: 'pipeline',
-        optionsJson: JSON.stringify({ ...options, exportCaptionOverlay: false }),
+        optionsJson: JSON.stringify(options),
       });
     } catch (error) {
       setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
@@ -174,45 +168,10 @@ export default function App() {
     }
   };
 
-  const handleExportOverlay = async () => {
-    if (!selectedFilePath || isExportingOverlay || isProcessing) return;
-    if (!options.burnCaptions) {
-      setTerminalLines((prev) => [...prev, '⚠️ Enable "Burn Viral Captions" first so the engine knows which style to export.']);
-      return;
-    }
-    setIsExportingOverlay(true);
-    setTerminalLines((prev) => [...prev,
-      '',
-      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-    `[📦] Starting CapCut overlay export (${options.captionLanguage === 'si' ? 'Sinhala' : 'English'})...`,
-    ]);
-    try {
-      await invoke<string>('run_python_engine', {
-        videoPath: selectedFilePath,
-        processType: 'pipeline',
-        optionsJson: JSON.stringify({
-          ...options,
-          removeSilence: false,
-          studioAudio: false,
-          autoZoom: false,
-          cinematicColor: false,
-          blurBackground: false,
-          bottomGlow: false,
-          burnCaptions: false,
-          exportCaptionOverlay: true,
-        }),
-      });
-    } catch (error) {
-      setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
-    } finally {
-      setIsExportingOverlay(false);
-    }
-  };
-
   const activeCount = Object.entries(options)
     .filter(([k, v]) => OPTIONS_META[k] && v === true).length;
 
-  const isBusy = isProcessing || isExportingOverlay;
+  const isBusy = isProcessing;
 
   return (
     <main className="min-h-screen text-white font-sans flex flex-col bg-[#09090b]">
@@ -404,6 +363,9 @@ export default function App() {
                                 <option value="p-heavy-stroke">3. Heavy Stroke Black</option>
                                 <option value="p-soft-yellow">4. Soft Pastel Yellow</option>
                                 <option value="p-neon-base">5. Neon Ambient White</option>
+                                {/* ADD THIS NEW LINE */}
+                                <option value="p-silver-translucent">6. Silver Translucent Glow</option>
+                                <option value="p-sunset-glow">7. Sunset Warm Glow</option>
                               </select>
                             </div>
                             <div className="flex items-center justify-between">
@@ -416,6 +378,9 @@ export default function App() {
                                 <option value="s-crimson-red">3. Aggressive Crimson</option>
                                 <option value="s-cyber-purple">4. Cyberpunk Purple</option>
                                 <option value="s-luxury-gold">5. Luxury Metallic Gold</option>
+                                {/* ADD THIS NEW LINE */}
+                                <option value="s-dark-blue-glow">6. Dark Blue Glow</option>
+                                <option value="s-matrix-green">7. Matrix Hacker Green</option>
                                 <option value="none">Disable Highlights</option>
                               </select>
                             </div>
@@ -487,6 +452,7 @@ export default function App() {
                             className="bg-emerald-950/30 border border-emerald-900/50 text-emerald-300 text-xs rounded p-1 outline-none focus:border-emerald-500 font-medium">
                             <option value="spring-up">🚀 Spring Pop (Hormozi)</option>
                             <option value="slide-up">🌊 Smooth Slide Up</option>
+                            <option value="ease-slide-up">✨ Ease Slide Up (TikTok)</option>
                             <option value="slide-right">⚡ Fast Slide Right</option>
                             <option value="none">⏹️ Hard Cut (None)</option>
                           </select>
@@ -571,70 +537,6 @@ export default function App() {
                           </label>
                         </div>
 
-                        <div className="border-t border-zinc-800/50 pt-3 mt-1 flex flex-col gap-2">
-                          <label className="flex items-center gap-2 cursor-pointer mb-1 group">
-                            <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${options.greenScreenOverlay ? 'bg-emerald-500 border-emerald-500' : 'bg-zinc-900 border-zinc-700 group-hover:border-zinc-500'
-                              }`}>
-                              {options.greenScreenOverlay && <span className="text-white text-[10px]">✓</span>}
-                            </div>
-                            <span className="text-xs text-zinc-300 font-medium">Use Green Screen (Highly Recommended)</span>
-                            <input type="checkbox" className="hidden"
-                              checked={options.greenScreenOverlay}
-                              onChange={() => toggleOption('greenScreenOverlay')}
-                            />
-                          </label>
-
-                          <p className="text-xs text-zinc-500 leading-relaxed">
-                            {options.greenScreenOverlay ? (
-                              <>Export captions as a fast <span className="text-emerald-400 font-medium">.mp4 (Green Screen)</span> — remove background in CapCut using Chroma Key.</>
-                            ) : (
-                              <>Export captions as a <span className="text-zinc-300 font-medium">transparent .mov (ProRes)</span> — drag it above your footage. CapCut Proxy destroys alpha channel.</>
-                            )}
-                          </p>
-                          <button
-                            onClick={handleExportOverlay}
-                            disabled={!selectedFilePath || isBusy}
-                            className={`w-full py-2.5 rounded-lg font-semibold text-sm transition-all flex items-center justify-center gap-2 ${isBusy || !selectedFilePath
-                              ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-                              : options.greenScreenOverlay
-                                ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_0_16px_rgba(16,185,129,0.3)] active:scale-[0.99]'
-                                : 'bg-sky-600 hover:bg-sky-500 text-white shadow-[0_0_16px_rgba(14,165,233,0.3)] active:scale-[0.99]'
-                              }`}
-                          >
-                            {isExportingOverlay ? (
-                              <>
-                                <span className="animate-spin">⚙️</span>
-                                {options.greenScreenOverlay ? 'Rendering Green Screen...' : 'Rendering ProRes overlay…'}
-                              </>
-                            ) : (
-                              <>
-                                <span>📦</span>
-                                {options.greenScreenOverlay ? 'Export for CapCut (.mp4 Green Screen)' : 'Export for CapCut (.mov transparent)'}
-                              </>
-                            )}
-                          </button>
-                          {!selectedFilePath && (
-                            <p className="text-[10px] text-zinc-600 text-center">Select a video file first</p>
-                          )}
-                        </div>
-
-                      </div>
-                    )}
-
-                    {key === 'aiBroll' && options.aiBroll && (
-                      <div className="flex flex-col gap-3 p-3 ml-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
-                        <div className="text-xs text-zinc-400 italic border-b border-zinc-800/50 pb-2">
-                          Gemini acts as the AI Director: it scans your audio, finds the highest-impact moments, and generates cinematic kinetic typography B-roll overlays exactly when needed.
-                        </div>
-
-                        {/* Gemini Key is strictly required for this to work */}
-                        <div className="flex flex-col gap-1 mt-1">
-                          <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">Gemini API Key (Required)</span>
-                          <input type="password" placeholder="Paste Google AI Studio Key..."
-                            value={options.geminiApiKey}
-                            onChange={(e) => setOptions((prev) => ({ ...prev, geminiApiKey: e.target.value }))}
-                            className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1.5 outline-none focus:border-orange-500 w-full" />
-                        </div>
                       </div>
                     )}
 
