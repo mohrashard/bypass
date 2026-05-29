@@ -147,6 +147,7 @@ async def render_html_to_mp4(
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
+            channel="msedge",
             headless=True,
             args=chromium_args,
         )

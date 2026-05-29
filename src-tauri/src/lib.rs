@@ -17,13 +17,11 @@ async fn run_python_engine(
 
     let shell = app.shell();
     
-    // Use absolute-style path relative to the executable for better reliability
-    let python_path = "../ai_engine/venv/Scripts/python.exe";
-    let script_path = format!("../ai_engine/{}.py", process_type);
-
+    // Tauri Sidecar logic - runs the compiled Python executable
     let (mut rx, _child) = shell
-        .command(python_path)
-        .args([script_path, video_path, options_json])
+        .sidecar(process_type)
+        .map_err(|e| e.to_string())?
+        .args([video_path, options_json])
         .spawn()
         .map_err(|e| e.to_string())?;
 
@@ -70,9 +68,6 @@ async fn run_nexus_engine(
 
     let shell = app.shell();
 
-    let python_path = "../ai_engine/venv/Scripts/python.exe";
-    let script_path = "../ai_engine/nexus_engine.py";
-
     // Merge html into the options JSON
     let mut options: serde_json::Value = serde_json::from_str(&options_json)
         .unwrap_or(serde_json::json!({}));
@@ -81,8 +76,9 @@ async fn run_nexus_engine(
     let merged_options = options.to_string();
 
     let (mut rx, _child) = shell
-        .command(python_path)
-        .args([script_path, &merged_options, &output_path])
+        .sidecar("nexus_engine")
+        .map_err(|e| e.to_string())?
+        .args([&merged_options, &output_path])
         .spawn()
         .map_err(|e| e.to_string())?;
 

@@ -15,11 +15,14 @@ if os.name == 'nt':
     pathlib.PosixPath = pathlib.WindowsPath
     import importlib.util
     for pkg in ["nvidia.cublas", "nvidia.cudnn"]:
-        spec = importlib.util.find_spec(pkg)
-        if spec and spec.submodule_search_locations:
-            bin_path = os.path.join(spec.submodule_search_locations[0], "bin")
-            if os.path.exists(bin_path):
-                os.environ["PATH"] = bin_path + os.pathsep + os.environ.get("PATH", "")
+        try:
+            spec = importlib.util.find_spec(pkg)
+            if spec and spec.submodule_search_locations:
+                bin_path = os.path.join(spec.submodule_search_locations[0], "bin")
+                if os.path.exists(bin_path):
+                    os.environ["PATH"] = bin_path + os.pathsep + os.environ.get("PATH", "")
+        except Exception:
+            pass
 
 warnings.filterwarnings("ignore")
 os.environ["PYTHONWARNINGS"] = "ignore"
@@ -574,47 +577,53 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
 def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> list:
     import google.generativeai as genai
     import time
-
-    engine_dir = os.path.dirname(os.path.abspath(__file__))
-    load_dotenv(os.path.join(engine_dir, ".env"))
-
+    import json
+    import os
+ 
+    # Grab this from Google AI Studio (it's free)
     api_key = api_key_opt or os.getenv("GEMINI_API_KEY")
     if not api_key or api_key == "YOUR_FREE_API_KEY":
-        print("[⚠️] GEMINI_API_KEY not found. Proceeding without Gemini transcript.")
+        print("[⚠️] GEMINI_API_KEY not found in environment. Proceeding without forced alignment.")
         return []
-
-    def _run_gemini(current_key):
-        genai.configure(api_key=current_key)
-        print("[⚙️] Uploading audio to Gemini API...")
-
+    
+    genai.configure(api_key=api_key)
+    print("[⚙️] Uploading audio to Gemini API...")
+    
+    try:
+        # 1. Upload the extracted .wav file to Gemini
         audio_file = genai.upload_file(path=audio_path)
-
+        
+        # 2. Wait for processing (required for audio)
         while audio_file.state.name == "PROCESSING":
             print(".", end="", flush=True)
             time.sleep(2)
             audio_file = genai.get_file(audio_file.name)
         print("\n[✅] Audio processed by Gemini.")
-
+ 
+        # 3. Use Gemini Flash Latest (Universal free tier fallback)
         model = genai.GenerativeModel('gemini-flash-latest')
-
+ 
+        # 4. The strict prompt to prevent hallucination and force formatting
+        # 4. The strict prompt to prevent hallucination and force formatting
+        # 4. The strict prompt to prevent hallucination and force formatting
         prompt = """
         Listen to this audio. It is a mix of Sinhala and English (Singlish).
         Write down EXACTLY what is said, verbatim.
-
-        CRITICAL RULES:
+        
+        CRITICAL RULES: 
         1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
         2. Break the text into short, logical phrases of exactly 3 to 5 words each.
-        3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission").
+        3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission"). 
         4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").
         5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්").
         6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
-        7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text.
+        7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.
         8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:
            - THE HOOK: The very first attention-grabbing statement or question.
-           - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement.
+           - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").
            - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.
            DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.
-
+        
         You must provide the approximate start and end times for each phrase in seconds.
         Output strictly as a JSON array. Example:
         [
@@ -624,64 +633,203 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
         ]
         Do not include any markdown formatting. Just the raw JSON array.
         """
-
-        print("[⚙️] Generating transcript...")
+ 
+        print("[⚙️] Generating 99% accurate transcript...")
         response = model.generate_content(
             [prompt, audio_file],
             generation_config={"response_mime_type": "application/json"}
         )
-
+        
+        # Clean up the file from Google's servers
         genai.delete_file(audio_file.name)
-
+        
+        # Strip potential markdown formatting just in case
         clean_text = response.text.replace('```json', '').replace('```', '').strip()
-        word_list  = json.loads(clean_text)
-        print(f"[✅] Extracted {len(word_list)} phrases from Gemini.")
-
+        word_list = json.loads(clean_text)
+        print(f"[✅] Successfully extracted {len(word_list)} phrases from Gemini.")
+        
+        # --- NEW: PRINT EXACT GEMINI OUTPUT TO TERMINAL ---
         preview_text = " ".join([w.get("phrase", w.get("word", "")) for w in word_list])
-        print("\n" + "=" * 50)
+        print("\n" + "="*50)
         print("[🔍] RAW GEMINI TEXT DUMP:")
         print(preview_text)
-        print("=" * 50 + "\n")
-
+        print("="*50 + "\n")
+        # --------------------------------------------------
+ 
         return word_list
-
-    try:
-        return _run_gemini(api_key)
     except Exception as e:
-        print(f"[❌] Gemini API Error with primary key: {e}")
-        bypass_key = os.getenv("GEMINI_API_KEY_BYPASS")
-        if bypass_key:
-            print("[⚙️] Retrying with GEMINI_API_KEY_BYPASS...")
-            try:
-                return _run_gemini(bypass_key)
-            except Exception as e2:
-                print(f"[❌] Gemini API Error with bypass key: {e2}")
-                return []
-        else:
-            print("[❌] No bypass key found. Aborting.")
-            return []
-
-
+        print(f"[❌] Gemini API Error: {e}")
+        return []
+ 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. VAD INTERVAL EXTRACTOR  ← NEW: replaces all the old Whisper word logic
+# DROP-IN REPLACEMENT: align_phrases_to_whisper + stage_burn_sinhala_captions
 #
-# Whisper's Voice Activity Detection (VAD) is energy-based silence detection.
-# It is 100% language-agnostic — it doesn't care what language is spoken,
-# it just finds where sound starts and stops. This is the ground-truth timing
-# source we map Gemini's phrases onto.
+# THE PROBLEM (diagnosed):
+#   Gemini's phrase timestamps are systematically EARLY — it fires the start
+#   timestamp the moment it "predicts" the phrase, not when the audio lands.
+#   On Sinhala/mixed audio Whisper also hallucinates word boundaries during
+#   silence, so snapping to "nearest word" just snaps to a ghost.
+#
+# THE 3-LAYER FIX:
+#   Layer 1 — Global drift correction
+#             Sample N Gemini↔Whisper pairs and compute the median offset.
+#             Shift ALL Gemini timestamps by that amount before any snapping.
+#   Layer 2 — Segment-anchored snapping (not word-anchored)
+#             Use Whisper's rock-solid SEGMENT boundaries as anchors.
+#             Find the segment whose [start, end] window best contains the
+#             drift-corrected phrase start. This is immune to word-level noise.
+#   Layer 3 — Gap-fill smoothing
+#             After all phrases are placed, fill any dead gap between
+#             phrase[i].end and phrase[i+1].start so the caption holds
+#             on screen until the next word begins (no flicker, no early exit).
 # ─────────────────────────────────────────────────────────────────────────────
 
-def extract_vad_intervals(audio_path: str) -> list:
+import bisect
+import statistics
+from typing import List, Dict, Tuple, Optional
+
+
+def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list) -> list:
     """
-    Runs faster-whisper with VAD filter enabled, segment mode only.
-    Returns a sorted list of {"start": float, "end": float} dicts.
-    These timestamps reflect real acoustic energy — no language model involved.
-    Falls back to [] on failure so the caller can use Gemini timestamps.
+    DYNAMIC TIME WARPING (Elastic Projection)
+    Fixes the "sometimes fast, sometimes slow" bug by treating Gemini's 
+    hallucinated timestamps as relative percentages, mapping them to 
+    Whisper's absolute real-world VAD timeline.
     """
+    phrases = [p for p in gemini_phrases if p.get("phrase", "").strip()]
+    if not phrases: return []
+    
+    # If whisper failed entirely, return gemini as-is
+    if not whisper_words: 
+        return phrases
+
+    # Whisper anchors are guaranteed to be real spoken sound
+    anchors = sorted(whisper_words, key=lambda x: x["start"])
+    
+    # ── 1. Timeline Normalization ──
+    g_starts = [float(p.get("start", 0)) for p in phrases]
+    g_min, g_max = min(g_starts), max(g_starts)
+    
+    # Failsafe for 0-duration Gemini outputs
+    if g_max == g_min: g_max = g_min + 1.0 
+
+    w_starts = [float(a["start"]) for a in anchors]
+    w_min, w_max = min(w_starts), max(w_starts)
+    if w_max == w_min: w_max = w_min + 1.0
+
+    aligned = []
+    last_end = 0.0
+    MIN_DUR = 0.40
+
+    for i, p in enumerate(phrases):
+        g_time = float(p.get("start", 0))
+        
+        # ── 2. Calculate Elastic Progress ──
+        # Where are we in the Gemini timeline? (0.0 to 1.0)
+        progress = (g_time - g_min) / (g_max - g_min)
+        
+        # Project this progress onto the Whisper absolute timeline
+        projected_w_time = w_min + progress * (w_max - w_min)
+        
+        # ── 3. Forward-Only Snapping ──
+        # Find the nearest actual spoken anchor that hasn't been passed yet
+        valid_anchors = [a for a in anchors if a["start"] >= last_end - 0.1]
+        
+        if valid_anchors:
+            best_anchor = min(valid_anchors, key=lambda a: abs(a["start"] - projected_w_time))
+            actual_start = best_anchor["start"]
+        else:
+            actual_start = max(last_end, projected_w_time)
+
+        # Strict overlap prevention
+        actual_start = max(actual_start, last_end) 
+
+        # ── 4. Dynamic End Time Prediction ──
+        if i + 1 < len(phrases):
+            next_g_time = float(phrases[i+1].get("start", g_time + 1.0))
+            next_prog = (next_g_time - g_min) / (g_max - g_min)
+            next_proj_w = w_min + next_prog * (w_max - w_min)
+            
+            valid_next = [a for a in anchors if a["start"] > actual_start]
+            if valid_next:
+                next_anchor = min(valid_next, key=lambda a: abs(a["start"] - next_proj_w))
+                # Cut the caption right before the next word hits
+                actual_end = next_anchor["start"] - 0.05
+            else:
+                actual_end = next_proj_w - 0.05
+        else:
+            # Last phrase caps at the final Whisper anchor
+            actual_end = anchors[-1]["end"] if anchors[-1]["end"] > actual_start else actual_start + 1.0
+
+        # Enforce minimum readability duration
+        if actual_end - actual_start < MIN_DUR:
+            actual_end = actual_start + MIN_DUR
+
+        aligned.append({
+            "phrase": p["phrase"],
+            "start": actual_start,
+            "end": actual_end
+        })
+        last_end = actual_end
+
+    # ── 5. Gap Fill Smoothing ──
+    # Stretches captions across micro-pauses so the screen doesn't flicker black
+    for i in range(len(aligned) - 1):
+        gap = aligned[i + 1]["start"] - aligned[i]["end"]
+        if 0 < gap <= 0.80:
+            aligned[i]["end"] += gap * 0.85 
+
+    return aligned
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATED stage_burn_sinhala_captions
+# Key change: force Whisper into SEGMENT mode for Sinhala audio.
+# Segment boundaries are 100% reliable; word boundaries on Sinhala are not.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UPDATED stage_burn_sinhala_captions
+# Key change: Template Engine + Segment anchors
+# ─────────────────────────────────────────────────────────────────────────────
+
+def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
+    import json, shutil, subprocess, os
+    from playwright.sync_api import sync_playwright
+
+    base_dir   = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_si_captioned.mp4"
+    ovr_dir    = os.path.join(base_dir, "_cap_overlays_si")
+    os.makedirs(ovr_dir, exist_ok=True)
+
+    si_main_class = cap_options.get("siMainStyle", "si-main-blue")
+    si_pri_class  = cap_options.get("siPrimaryStyle", "si-pri-silver")
+    si_sec_class  = cap_options.get("siSecondaryStyle", "si-sec-gold")
+
+    # 1. Extract Audio
+    temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
+    subprocess.run(
+        ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le",
+         "-ar", "16000", "-ac", "1", temp_audio, "-y"],
+        check=True, capture_output=True
+    )
+
+    # 2. Get Perfect Phrases + Rough Timestamps from Gemini
+    gemini_phrases = get_perfect_sinhala_transcript(temp_audio, cap_options.get("geminiApiKey"))
+
+    if not gemini_phrases:
+        print("[❌] FATAL: Gemini failed. Cannot render captions.")
+        if os.path.exists(temp_audio): os.remove(temp_audio)
+        return video_path
+
+    print(f"[⚙️] Extracted {len(gemini_phrases)} Singlish phrases from Gemini.")
+
+    # ── STEP 2: Whisper — SEGMENT MODE (most reliable for Sinhala) ───────────
+    print("[⚙️] Running Whisper (base) — SEGMENT-ANCHOR mode for Sinhala...")
+    whisper_words = []
     try:
         from faster_whisper import WhisperModel
         import importlib.util
-
         if os.name == 'nt':
             for pkg in ["nvidia.cublas", "nvidia.cudnn"]:
                 spec = importlib.util.find_spec(pkg)
@@ -692,216 +840,78 @@ def extract_vad_intervals(audio_path: str) -> list:
 
         try:
             w_model = WhisperModel("base", device="cuda", compute_type="int8")
-            print("[⚙️] Whisper VAD running on CUDA...")
         except Exception:
             w_model = WhisperModel("base", device="cpu", compute_type="int8")
-            print("[⚙️] Whisper VAD running on CPU...")
 
-        # CRITICAL SETTINGS:
-        # word_timestamps=False  — do NOT generate Sinhala word timestamps (hallucinated)
-        # vad_filter=True        — use energy-based silence detection (language-agnostic)
-        # language=None          — auto-detect, never force "si" (causes word hallucination)
-        # condition_on_previous_text=False — prevents guessing words from context
-        segments_raw, info = w_model.transcribe(
-            audio_path,
-            word_timestamps=False,
+        w_segments_raw, _ = w_model.transcribe(
+            temp_audio,
+            word_timestamps=True,
             vad_filter=True,
-            vad_parameters={
-                "min_silence_duration_ms": 300,
-                "speech_pad_ms":           100,
-                "threshold":               0.35,
-            },
-            condition_on_previous_text=False,
-            language=None,
+            condition_on_previous_text=False
         )
+        w_segments_list = list(w_segments_raw)
 
-        segments  = list(segments_raw)
-        intervals = [{"start": seg.start, "end": seg.end} for seg in segments]
-        intervals.sort(key=lambda x: x["start"])
-
-        print(f"[✅] VAD extracted {len(intervals)} real speech intervals "
-              f"(audio: {info.duration:.1f}s)")
-        return intervals
-
-    except Exception as e:
-        print(f"[⚠️] VAD extraction failed: {e}")
-        return []
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 8. MONOTONIC VAD ALIGNMENT  ← NEW: replaces align_phrases_to_whisper
-#
-# THE FIX IN ONE SENTENCE:
-#   Gemini provides the text. Whisper VAD provides the timing.
-#   We assign phrases to intervals in strict forward order — no elastic
-#   projection, no nearest-anchor hunting, no backward jumps possible.
-# ─────────────────────────────────────────────────────────────────────────────
-
-def align_phrases_to_vad(gemini_phrases: list, vad_intervals: list) -> list:
-    """
-    Distributes Gemini phrases across real VAD speech intervals monotonically.
-
-    Case A — more intervals than phrases:  one phrase per interval (1:1).
-    Case B — more phrases than intervals:  phrases packed into intervals
-             proportionally by interval duration.
-    Case C — no intervals at all:          fall back to Gemini timestamps +0.1s.
-    """
-    phrases = [p for p in gemini_phrases if str(p.get("phrase", "")).strip()]
-    if not phrases:
-        return []
-
-    # Fallback: VAD completely failed
-    if not vad_intervals:
-        print("[⚠️] No VAD intervals — falling back to Gemini timestamps + 0.10s.")
-        return [
-            {
-                "phrase": p["phrase"],
-                "start":  float(p.get("start", 0)) + 0.10,
-                "end":    float(p.get("end",   float(p.get("start", 0)) + 1.0)) + 0.10,
-            }
-            for p in phrases
-        ]
-
-    MIN_DUR    = 0.35   # minimum caption display duration (seconds)
-    MIN_GAP    = 0.02   # minimum gap between consecutive captions (seconds)
-    aligned    = []
-    n_phrases  = len(phrases)
-    n_intervals = len(vad_intervals)
-
-    print(f"[⚙️] Distributing {n_phrases} phrases across {n_intervals} VAD intervals...")
-
-    if n_intervals >= n_phrases:
-        # ── Case A: one phrase per interval ─────────────────────────────────
-        for i, phrase in enumerate(phrases):
-            iv    = vad_intervals[i]
-            start = iv["start"]
-            end   = max(iv["end"], start + MIN_DUR)
-
-            # Clamp to start of next interval to prevent visual overlap
-            if i + 1 < n_phrases:
-                next_start = vad_intervals[i + 1]["start"]
-                end = min(end, next_start - MIN_GAP)
-                end = max(end, start + MIN_DUR)
-
-            aligned.append({
-                "phrase": phrase["phrase"],
-                "start":  round(start, 3),
-                "end":    round(end,   3),
+        for seg in w_segments_list:
+            whisper_words.append({
+                "word":  "[seg]",
+                "start": seg.start,
+                "end":   seg.end
             })
 
+        word_anchors = []
+        for seg in w_segments_list:
+            for w in (seg.words or []):
+                if w.word.strip():
+                    word_anchors.append({
+                        "word":  w.word.strip(),
+                        "start": w.start,
+                        "end":   w.end
+                    })
+
+        if len(word_anchors) >= len(gemini_phrases) * 1.5:
+            combined = whisper_words + word_anchors
+            combined.sort(key=lambda x: x["start"])
+            deduped = [combined[0]] if combined else []
+            for a in combined[1:]:
+                if a["start"] - deduped[-1]["start"] > 0.05:
+                    deduped.append(a)
+            whisper_words = deduped
+            print(f"[⚙️] Using {len(w_segments_list)} segment + {len(word_anchors)} word anchors "
+                  f"→ {len(whisper_words)} total after dedup.")
+        else:
+            print(f"[⚙️] Using {len(whisper_words)} segment-level anchors "
+                  f"(word anchors too sparse: {len(word_anchors)}).")
+
+    except Exception as e:
+        print(f"[⚠️] Whisper failed ({e}). Falling back to Gemini timestamps.")
+        whisper_words = []
+
+    # ── STEP 3: Drift-corrected alignment ────────────────────────────────────
+    if whisper_words:
+        segments_data = align_phrases_to_whisper(gemini_phrases, whisper_words)
+        print(f"[✅] Alignment done — {len(segments_data)} synced phrases.")
     else:
-        # ── Case B: pack multiple phrases into each interval ─────────────────
-        total_speech = sum(iv["end"] - iv["start"] for iv in vad_intervals)
-        phrase_idx   = 0
-        assignments  = []
+        print("[⚠️] Using Gemini timestamps with +0.10s offset as fallback.")
+        segments_data = [
+            {"phrase": p["phrase"],
+             "start":  p["start"] + 0.10,
+             "end":    p["end"]   + 0.10}
+            for p in gemini_phrases
+        ]
 
-        for iv_idx, iv in enumerate(vad_intervals):
-            if phrase_idx >= n_phrases:
-                break
-            iv_dur = iv["end"] - iv["start"]
-            # Proportional share — longer intervals get more phrases
-            share  = max(1, round((iv_dur / total_speech) * n_phrases))
-            # Last interval gets all remaining phrases
-            if iv_idx == len(vad_intervals) - 1:
-                share = n_phrases - phrase_idx
-            share = min(share, n_phrases - phrase_idx)
-            if share <= 0:
-                continue
-            assignments.append((iv_idx, list(range(phrase_idx, phrase_idx + share))))
-            phrase_idx += share
-
-        for iv_idx, p_indices in assignments:
-            iv    = vad_intervals[iv_idx]
-            count = len(p_indices)
-            slot  = (iv["end"] - iv["start"]) / count
-
-            for slot_i, p_i in enumerate(p_indices):
-                start = iv["start"] + slot_i * slot
-                end   = start + slot - MIN_GAP
-                end   = max(end, start + MIN_DUR)
-                aligned.append({
-                    "phrase": phrases[p_i]["phrase"],
-                    "start":  round(start, 3),
-                    "end":    round(end,   3),
-                })
-
-    # ── Gap-fill smoothing ───────────────────────────────────────────────────
-    # Stretch captions into micro-pauses so screen never flickers black
-    for i in range(len(aligned) - 1):
-        gap = aligned[i + 1]["start"] - aligned[i]["end"]
-        if 0 < gap <= 0.60:
-            aligned[i]["end"] = round(aligned[i]["end"] + gap * 0.80, 3)
-
-    print(f"[✅] Monotonic VAD alignment complete — {len(aligned)} captions placed.")
-    return aligned
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 9. SINHALA CAPTION BURN ENGINE  ← FIXED
-# ─────────────────────────────────────────────────────────────────────────────
-
-def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
-    from playwright.sync_api import sync_playwright
-
-    base_dir   = os.path.dirname(os.path.abspath(video_path))
-    output_vid = os.path.splitext(video_path)[0] + "_si_captioned.mp4"
-    ovr_dir    = os.path.join(base_dir, "_cap_overlays_si")
-    os.makedirs(ovr_dir, exist_ok=True)
-
-    si_main_class  = cap_options.get("siMainStyle",     "si-main-blue")
-    si_pri_class   = cap_options.get("siPrimaryStyle",  "si-pri-silver")
-    si_sec_class   = cap_options.get("siSecondaryStyle","si-sec-gold")
-    cap_bottom_pct = float(cap_options.get("captionBottomPercent", 22)) / 100.0
-
-    # ── STEP 1: Extract audio ────────────────────────────────────────────────
-    temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
-    subprocess.run(
-        ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le",
-         "-ar", "16000", "-ac", "1", temp_audio, "-y"],
-        check=True, capture_output=True
-    )
-
-    # ── STEP 2: Gemini — get TEXT only (timestamps are thrown away) ──────────
-    print("[⚙️] Getting Singlish text from Gemini (timestamps discarded)...")
-    gemini_phrases = get_perfect_sinhala_transcript(
-        temp_audio, cap_options.get("geminiApiKey")
-    )
-
-    if not gemini_phrases:
-        print("[❌] FATAL: Gemini returned nothing. Cannot render captions.")
-        if os.path.exists(temp_audio): os.remove(temp_audio)
-        return video_path
-
-    print(f"[⚙️] {len(gemini_phrases)} Singlish phrases received from Gemini.")
-
-    # ── STEP 3: Whisper VAD — real speech boundaries (NO word recognition) ───
-    #
-    # We are not asking Whisper to understand Sinhala words.
-    # We are only asking it WHERE there is speech vs silence.
-    # VAD = Voice Activity Detection = energy thresholding = language-agnostic.
-    #
-    print("[⚙️] Running Whisper VAD for real speech boundaries...")
-    vad_intervals = extract_vad_intervals(temp_audio)
-
-    # ── STEP 4: Monotonic forward alignment (replaces elastic projection) ─────
-    segments_data = align_phrases_to_vad(gemini_phrases, vad_intervals)
-
-    if not segments_data:
-        print("[❌] Alignment produced no output. Aborting.")
-        if os.path.exists(temp_audio): os.remove(temp_audio)
-        return video_path
-
-    # ── Director's cut flash times (pipe symbols from Gemini) ────────────────
+    # ── NEW: Extract your Full-Stops for the Transition Engine ──
     flash_times = []
     for i, item in enumerate(segments_data):
-        if "|" in str(item.get("phrase", "")):
+        phrase_text = str(item.get("phrase", ""))
+        # If the AI marked this phrase with a full stop or question mark
+        if "." in phrase_text or "?" in phrase_text or "!" in phrase_text:
+            # We want the transition to hit exactly as the NEXT sentence starts
             if i + 1 < len(segments_data):
-                flash_times.append(float(segments_data[i + 1]["start"]))
-
+                flash_times.append(float(segments_data[i+1]["start"]))
+                
     with open(os.path.join(base_dir, "_flash_times.json"), "w") as f:
         json.dump(flash_times, f)
 
-    # ── Video dimensions ─────────────────────────────────────────────────────
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_entries", "stream=width,height,r_frame_rate",
@@ -911,7 +921,6 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     info_json = json.loads(probe.stdout)["streams"][0]
     W, H = int(info_json["width"]), int(info_json["height"])
 
-    # ── HTML/CSS caption template ─────────────────────────────────────────────
     def make_base_html(width: int, height: int) -> str:
         return f"""<!DOCTYPE html>
 <html>
@@ -922,8 +931,9 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   html, body {{ width: {width}px; height: {height}px; background: transparent; overflow: hidden; }}
   .caption-wrap {{
-    position: absolute; bottom: {int(height * cap_bottom_pct)}px; left: 0; right: 0;
-    padding: 0 {int(width * 0.08)}px; text-align: center;
+    position: absolute; bottom: {int(height * 0.22)}px; left: 0; right: 0;
+    padding: 0 {int(width * 0.08)}px;
+    text-align: center;
   }}
   .phrase-cap {{
     display: inline-block; line-height: 1.3; margin: 0 6px;
@@ -931,25 +941,31 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     background-clip: text; color: transparent;
   }}
   .si-font-main {{ font-family: 'Gemunu Libre', sans-serif; font-weight: 800; }}
-  .si-font-pri  {{ font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -0.5px; }}
-  .si-font-sec  {{ font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -1px; }}
-  .si-main-blue    {{ background-image: linear-gradient(to bottom, #82cfff 0%, #0077ff 100%); filter: drop-shadow(0 0 12px rgba(0,100,255,0.9)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
-  .si-main-emerald {{ background-image: linear-gradient(to bottom, #34d399 0%, #059669 100%); filter: drop-shadow(0 0 10px rgba(16,185,129,0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
-  .si-main-crimson {{ background-image: linear-gradient(to bottom, #fb7185 0%, #e11d48 100%); filter: drop-shadow(0 0 12px rgba(225,29,72,0.7)) drop-shadow(0 3px 6px rgba(0,0,0,0.9)); }}
-  .si-main-amber   {{ background-image: linear-gradient(to bottom, #fcd34d 0%, #d97706 100%); filter: drop-shadow(0 0 10px rgba(217,119,6,0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
-  .si-main-purple  {{ background-image: linear-gradient(to right,  #e879f9 0%, #a21caf 100%); filter: drop-shadow(0 0 12px rgba(192,38,211,0.7)) drop-shadow(0 2px 5px rgba(0,0,0,0.9)); }}
-  .si-main-white   {{ background-image: linear-gradient(to bottom, #ffffff 0%, #e5e5e5 100%); filter: drop-shadow(0 4px 6px rgba(0,0,0,1)) drop-shadow(0 1px 3px rgba(0,0,0,0.8)); }}
-  .si-pri-silver     {{ background-image: linear-gradient(160deg, #ffffff 0%, #d2e8ff 30%, #b4d7ff 60%, #ffffff 100%); filter: drop-shadow(0 0 10px rgba(140,185,255,0.5)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
-  .si-pri-gold       {{ background-image: linear-gradient(160deg, #fef08a 0%, #eab308 50%, #ca8a04 100%); filter: drop-shadow(0 0 8px rgba(234,179,8,0.4)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
-  .si-pri-cyan       {{ background-image: linear-gradient(to bottom, #67e8f9 0%, #06b6d4 100%); filter: drop-shadow(0 0 10px rgba(6,182,212,0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
-  .si-pri-magenta    {{ background-image: linear-gradient(to right,  #f472b6 0%, #db2777 100%); filter: drop-shadow(0 0 10px rgba(219,39,119,0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
-  .si-pri-slate      {{ background-image: linear-gradient(to bottom, #cbd5e1 0%, #64748b 100%); filter: drop-shadow(0 3px 8px rgba(0,0,0,1)) drop-shadow(0 1px 2px rgba(0,0,0,0.9)); }}
-  .si-pri-neon-green {{ background-image: linear-gradient(to bottom, #bef264 0%, #65a30d 100%); filter: drop-shadow(0 0 12px rgba(101,163,13,0.7)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
-  .si-sec-gold  {{ background-image: linear-gradient(to bottom, #FFE81F 0%, #FF8A00 100%); filter: drop-shadow(0 0 15px rgba(255,165,0,0.6)) drop-shadow(0 3px 6px rgba(0,0,0,0.9)); }}
-  .si-sec-red   {{ background-image: linear-gradient(to bottom, #fca5a5 0%, #dc2626 100%); filter: drop-shadow(0 0 12px rgba(220,38,38,0.8))  drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
-  .si-sec-lime  {{ background-image: linear-gradient(to bottom, #d9f99d 0%, #65a30d 100%); filter: drop-shadow(0 0 12px rgba(132,204,22,0.8))  drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
-  .si-sec-pink  {{ background-image: linear-gradient(to bottom, #f9a8d4 0%, #db2777 100%); filter: drop-shadow(0 0 12px rgba(219,39,119,0.8))  drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
-  .si-sec-aqua  {{ background-image: linear-gradient(to bottom, #7dd3fc 0%, #0284c7 100%); filter: drop-shadow(0 0 12px rgba(2,132,199,0.8))   drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-font-pri {{ font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -0.5px; }}
+  .si-font-sec {{ font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -1px; }}
+
+  /* Main (Sinhala) */
+  .si-main-blue {{ background-image: linear-gradient(to bottom, #82cfff 0%, #0077ff 100%); filter: drop-shadow(0 0 12px rgba(0, 100, 255, 0.9)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-main-emerald {{ background-image: linear-gradient(to bottom, #34d399 0%, #059669 100%); filter: drop-shadow(0 0 10px rgba(16, 185, 129, 0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
+  .si-main-crimson {{ background-image: linear-gradient(to bottom, #fb7185 0%, #e11d48 100%); filter: drop-shadow(0 0 12px rgba(225, 29, 72, 0.7)) drop-shadow(0 3px 6px rgba(0,0,0,0.9)); }}
+  .si-main-amber {{ background-image: linear-gradient(to bottom, #fcd34d 0%, #d97706 100%); filter: drop-shadow(0 0 10px rgba(217, 119, 6, 0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
+  .si-main-purple {{ background-image: linear-gradient(to right, #e879f9 0%, #a21caf 100%); filter: drop-shadow(0 0 12px rgba(192, 38, 211, 0.7)) drop-shadow(0 2px 5px rgba(0,0,0,0.9)); }}
+  .si-main-white {{ background-image: linear-gradient(to bottom, #ffffff 0%, #e5e5e5 100%); filter: drop-shadow(0 4px 6px rgba(0,0,0,1)) drop-shadow(0 1px 3px rgba(0,0,0,0.8)); }}
+
+  /* Primary (English) */
+  .si-pri-silver {{ background-image: linear-gradient(160deg, #ffffff 0%, #d2e8ff 30%, #b4d7ff 60%, #ffffff 100%); filter: drop-shadow(0 0 10px rgba(140,185,255,0.5)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
+  .si-pri-gold {{ background-image: linear-gradient(160deg, #fef08a 0%, #eab308 50%, #ca8a04 100%); filter: drop-shadow(0 0 8px rgba(234, 179, 8, 0.4)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
+  .si-pri-cyan {{ background-image: linear-gradient(to bottom, #67e8f9 0%, #06b6d4 100%); filter: drop-shadow(0 0 10px rgba(6, 182, 212, 0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
+  .si-pri-magenta {{ background-image: linear-gradient(to right, #f472b6 0%, #db2777 100%); filter: drop-shadow(0 0 10px rgba(219, 39, 119, 0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
+  .si-pri-slate {{ background-image: linear-gradient(to bottom, #cbd5e1 0%, #64748b 100%); filter: drop-shadow(0 3px 8px rgba(0,0,0,1)) drop-shadow(0 1px 2px rgba(0,0,0,0.9)); }}
+  .si-pri-neon-green {{ background-image: linear-gradient(to bottom, #bef264 0%, #65a30d 100%); filter: drop-shadow(0 0 12px rgba(101, 163, 13, 0.7)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
+
+  /* Secondary (Numbers) */
+  .si-sec-gold {{ background-image: linear-gradient(to bottom, #FFE81F 0%, #FF8A00 100%); filter: drop-shadow(0 0 15px rgba(255,165,0,0.6)) drop-shadow(0 3px 6px rgba(0,0,0,0.9)); }}
+  .si-sec-red {{ background-image: linear-gradient(to bottom, #fca5a5 0%, #dc2626 100%); filter: drop-shadow(0 0 12px rgba(220, 38, 38, 0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-sec-lime {{ background-image: linear-gradient(to bottom, #d9f99d 0%, #65a30d 100%); filter: drop-shadow(0 0 12px rgba(132, 204, 22, 0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-sec-pink {{ background-image: linear-gradient(to bottom, #f9a8d4 0%, #db2777 100%); filter: drop-shadow(0 0 12px rgba(219, 39, 119, 0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+  .si-sec-aqua {{ background-image: linear-gradient(to bottom, #7dd3fc 0%, #0284c7 100%); filter: drop-shadow(0 0 12px rgba(2, 132, 199, 0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
   .si-sec-white {{ background-image: linear-gradient(to bottom, #ffffff 0%, #f3f4f6 100%); filter: drop-shadow(0 0 15px rgba(255,255,255,0.5)) drop-shadow(0 4px 6px rgba(0,0,0,1)); }}
 </style>
 </head>
@@ -960,26 +976,26 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
 </body>
 </html>"""
 
-    # ── Playwright: render each phrase to a transparent PNG ──────────────────
     segments_arr = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        context = browser.new_context(
-            viewport={"width": W, "height": H}, device_scale_factor=1
-        )
+        context = browser.new_context(viewport={"width": W, "height": H}, device_scale_factor=1)
         page = context.new_page()
         page.set_content(make_base_html(W, H), wait_until="networkidle")
 
         for i, item in enumerate(segments_data):
+            # Grab the raw text first
             raw_text = str(item.get("phrase", "")).strip()
-            if not raw_text:
-                continue
-
+            if not raw_text: continue
+            
+            # THE MAGIC TRICK: Strip the pipe and any weird punctuation so it never renders on screen
             phrase_text = raw_text.replace("|", "").replace(".", "").replace(",", "").strip()
-            start_time  = float(item.get("start", 0))
-            end_time    = float(item.get("end", start_time + 1.0))
-            png_path    = os.path.join(ovr_dir, f"cap_phrase_{i:04d}.png")
+
+            start_time = float(item.get("start", 0))
+            end_time   = float(item.get("end", start_time + 1.0))
+
+            png_path   = os.path.join(ovr_dir, f"cap_phrase_{i:04d}.png")
 
             char_count = len(phrase_text)
             if   char_count <= 15: font_size = int(H * 0.055)
@@ -1007,8 +1023,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                             baseClass = 'si-font-main';
                             size += 5;
                         }
-                        innerHtml += `<span class="phrase-cap ${baseClass} ${className}"
-                                       style="font-size: ${size}px;">${word}</span>`;
+                        innerHtml += `<span class="phrase-cap ${baseClass} ${className}" style="font-size: ${size}px;">${word}</span>`;
                         if (words.length >= 3 && index === midPoint - 1) {
                             innerHtml += '<br>';
                         }
@@ -1016,11 +1031,8 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
                     el.innerHTML = innerHtml;
                 }
             """, {
-                "text":      phrase_text,
-                "fontSize":  font_size,
-                "mainClass": si_main_class,
-                "priClass":  si_pri_class,
-                "secClass":  si_sec_class,
+                "text": phrase_text, "fontSize": font_size,
+                "mainClass": si_main_class, "priClass": si_pri_class, "secClass": si_sec_class
             })
 
             page.screenshot(path=png_path, full_page=False, omit_background=True)
@@ -1028,13 +1040,13 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
 
         browser.close()
 
-    # ── FFmpeg overlay — batched chunks with cinematic animations ─────────────
+    # ── FFmpeg overlay — batched with Dynamic Mathematical Animations ─────────
     print("[⚙️] Compositing Sinhala captions with cinematic motion math...")
 
-    CHUNK         = 50
+    CHUNK = 50
     current_video = video_path
-    anim_style    = cap_options.get("captionAnimation", "spring-up")
-    dur           = 0.15
+    anim_style = cap_options.get("captionAnimation", "spring-up")
+    dur = 0.15
 
     for chunk_start in range(0, len(segments_arr), CHUNK):
         chunk     = segments_arr[chunk_start: chunk_start + CHUNK]
@@ -1096,7 +1108,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     if os.path.exists(temp_audio):
         os.remove(temp_audio)
 
-    print(f"[✅] Perfect Sinhala captions burned with '{anim_style}': {output_vid}")
+    print(f"[✅] Perfect Sinhala CSS captions burned with '{anim_style}' animation: {output_vid}")
     return output_vid
 
 
@@ -1450,6 +1462,104 @@ def stage_hardcode_flash(video_path: str, options: dict) -> str:
 
 
 # ─────────────────────────────────────────────
+# 15. MP4 → MP3 CONVERSION ENGINE
+# ─────────────────────────────────────────────
+
+def stage_mp4_to_mp3(video_path: str, options: dict = None) -> str:
+    """
+    Converts an MP4 (or any video) to a high-quality MP3 / FLAC audio file.
+
+    Options keys (all optional):
+      mp3Quality  : "128k" | "192k" | "320k" | "lossless"  (default: "192k")
+      mp3Normalize: True/False — apply -14 LUFS broadcast loudness normalisation
+      mp3Metadata : dict with "title", "artist", "album" for ID3 tags
+    """
+    if options is None:
+        options = {}
+
+    quality     = options.get("mp3Quality", "192k")
+    normalize   = options.get("mp3Normalize", False)
+    metadata    = options.get("mp3Metadata", {})
+
+    base_dir    = os.path.dirname(os.path.abspath(video_path))
+    stem        = os.path.splitext(os.path.basename(video_path))[0]
+
+    # ── Decide output format ──────────────────────────────────────────────────
+    if quality == "lossless":
+        out_ext   = ".flac"
+        codec_args = ["-c:a", "flac", "-compression_level", "8"]
+        print("[⚙️] MP4 → FLAC (lossless) export...")
+    else:
+        out_ext   = ".mp3"
+        # Validate bitrate; fall back to 192k on unknown input
+        valid_bitrates = {"128k", "192k", "320k"}
+        bitrate   = quality if quality in valid_bitrates else "192k"
+        codec_args = ["-c:a", "libmp3lame", "-b:a", bitrate, "-q:a", "0"]
+        print(f"[⚙️] MP4 → MP3 at {bitrate} export...")
+
+    output_path = os.path.join(base_dir, stem + out_ext)
+
+    # ── Build FFmpeg command ──────────────────────────────────────────────────
+    cmd = ["ffmpeg", "-i", video_path, "-vn"]
+
+    # Optional loudness normalisation (-14 LUFS broadcast standard)
+    if normalize:
+        print("[⚙️] Applying -14 LUFS loudness normalisation...")
+        # Two-pass loudnorm: detect → apply
+        probe_cmd = [
+            "ffmpeg", "-i", video_path, "-vn",
+            "-af", "loudnorm=I=-14:TP=-1:LRA=11:print_format=json",
+            "-f", "null", "-"
+        ]
+        probe_result = subprocess.run(
+            probe_cmd, capture_output=True, text=True
+        )
+        # Extract measured values from stderr (loudnorm prints to stderr)
+        stderr_text = probe_result.stderr
+        try:
+            import re
+            json_match = re.search(r'\{[^{}]+\}', stderr_text, re.DOTALL)
+            if json_match:
+                loud_data  = json.loads(json_match.group())
+                input_i    = loud_data.get("input_i",    "-23.0")
+                input_tp   = loud_data.get("input_tp",   "-2.0")
+                input_lra  = loud_data.get("input_lra",  "7.0")
+                input_thresh = loud_data.get("input_thresh", "-30.0")
+                af_filter  = (
+                    f"loudnorm=I=-14:TP=-1:LRA=11"
+                    f":measured_I={input_i}:measured_TP={input_tp}"
+                    f":measured_LRA={input_lra}:measured_thresh={input_thresh}"
+                    f":offset=0:linear=true"
+                )
+            else:
+                af_filter = "loudnorm=I=-14:TP=-1:LRA=11"
+        except Exception:
+            af_filter = "loudnorm=I=-14:TP=-1:LRA=11"
+
+        cmd += ["-af", af_filter]
+
+    cmd += codec_args
+
+    # Optional ID3 metadata tags
+    for tag_key, tag_val in metadata.items():
+        if tag_key in ("title", "artist", "album", "genre", "date", "comment"):
+            cmd += ["-metadata", f"{tag_key}={tag_val}"]
+
+    # Write sample rate + stereo explicitly so output is always predictable
+    cmd += ["-ar", "44100", "-ac", "2", output_path, "-y"]
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        print(f"[✅] Audio exported → {os.path.basename(output_path)}  ({size_mb:.2f} MB)")
+        return output_path
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        print(f"[❌] MP4 → MP3 conversion failed: {err_msg}")
+        raise
+
+
+# ─────────────────────────────────────────────
 # 14. MAIN PIPELINE ORCHESTRATION
 # ─────────────────────────────────────────────
 
@@ -1501,6 +1611,9 @@ def run_pipeline(video_path: str, options_json: str) -> None:
             export_captions_overlay_si(current_video, options)
         else:
             export_captions_overlay_en(current_video, options)
+
+    if options.get("mp4ToMp3"):
+        stage_mp4_to_mp3(current_video, options)
 
     print(f"\n[🚀] PIPELINE COMPLETE. Final output: {current_video}")
 

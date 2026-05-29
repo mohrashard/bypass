@@ -23,6 +23,8 @@ _*
 *.png
 *.jpg
 *.jpeg
+*.mp3
+*.flac
 !assets/
 !templates/
 
@@ -60,3 +62,8 @@ _cap_ovr_si/
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Build Artifacts
+build/
+dist/
+*.spec
