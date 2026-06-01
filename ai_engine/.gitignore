@@ -67,3 +67,8 @@ Thumbs.db
 build/
 dist/
 *.spec
+
+# Machine Learning Models
+pretrained_models/
+*.tflite
+*.task

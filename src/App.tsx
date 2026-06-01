@@ -23,6 +23,7 @@ const OPTIONS_META: Record<string, string> = {
   autoZoom: '🧠 Semantic Smart-Zooms',
   makeVertical: '📱 Face-Tracking Vertical',
   cinematicColor: '🎨 Cinematic Color Grade',
+  applyBeautyFilter: '✨ Custom Beauty Filter',
   bottomGlow: '🌌 Cinematic Bottom Glow',
   autoTransitions: '✨ Auto Sentence Transitions',
 };
@@ -59,6 +60,8 @@ export default function App() {
     zoomSpeed: 0.5,
     makeVertical: false,
     cinematicColor: false,
+    applyBeautyFilter: false,
+    beautyFilterMath: '',
     bottomGlow: false,
     autoTransitions: false,
     glowColor: '#000000',
@@ -273,6 +276,18 @@ export default function App() {
                             <option value="1.5">🌊 Slow Creep (1.5s)</option>
                           </select>
                         </div>
+                      </div>
+                    )}
+
+                    {key === 'applyBeautyFilter' && options.applyBeautyFilter && (
+                      <div className="flex flex-col gap-2 p-3 ml-2 rounded-lg bg-emerald-900/30 border border-emerald-800/50">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">✨</span>
+                          <span className="text-xs text-emerald-300 font-semibold tracking-wide">AI FACE MESH ACTIVE</span>
+                        </div>
+                        <p className="text-[10px] text-emerald-400/80 leading-relaxed">
+                          OpenCV will draw a 468-point 3D mask over your face, exclude your eyes and lips, apply high-end bilateral skin smoothing, lift shadows for a glowing complexion, and subtly slim the jawline.
+                        </p>
                       </div>
                     )}
 

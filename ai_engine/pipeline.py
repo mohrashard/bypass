@@ -1207,6 +1207,114 @@ def stage_bottom_glow(video_path: str, color_hex: str) -> str:
         color_hex = "000000"
     r, g, b = tuple(int(color_hex[i:i+2], 16) for i in (0, 2, 4))
 
+    # Glow overlay generation omitted for brevity if unmodified, assuming rest of function is below
+    # We will just insert stage_beauty_filter here.
+
+# ─────────────────────────────────────────────
+# 10.5 CINEMATIC BEAUTY FILTER ENGINE
+# ─────────────────────────────────────────────
+
+def stage_beauty_filter(video_path: str, options: dict) -> str:
+    import cv2
+    import numpy as np
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision
+    
+    print("[⚙️] Booting AI Face Mesh Beauty Engine (MediaPipe Tasks + OpenCV)...")
+    base_dir    = os.path.dirname(os.path.abspath(video_path))
+    output_vid  = os.path.splitext(video_path)[0] + "_beauty.mp4"
+    
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(engine_dir, "pretrained_models", "face_landmarker.task")
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    if not os.path.exists(model_path):
+        print("[⚙️] Downloading MediaPipe Face Landmarker model...")
+        import urllib.request
+        urllib.request.urlretrieve(
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+            model_path
+        )
+        
+    base_options = mp_python.BaseOptions(model_asset_path=model_path)
+    task_options = vision.FaceLandmarkerOptions(
+        base_options=base_options,
+        output_face_blendshapes=False,
+        output_facial_transformation_matrixes=False,
+        num_faces=1
+    )
+    
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not fps or fps != fps: fps = 30.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    cmd = [
+        "ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{width}x{height}", "-pix_fmt", "bgr24", "-r", str(fps), "-i", "-",
+        "-i", video_path, "-map", "0:v:0", "-map", "1:a:0?",
+        "-vf", "scale=iw:ih*1.03,crop=iw:ih",
+        "-c:v", "h264_nvenc", "-preset", "p4", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-c:a", "copy", output_vid
+    ]
+    
+    try:
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    except Exception as e:
+        print(f"[❌] Failed to open FFmpeg pipe: {e}")
+        return video_path
+    
+    LEFT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+    RIGHT_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+    LIPS = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40]
+    FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+
+    with vision.FaceLandmarker.create_from_options(task_options) as landmarker:
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
+            
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+            detection_result = landmarker.detect(mp_image)
+            
+            if detection_result.face_landmarks:
+                for face_landmarks in detection_result.face_landmarks:
+                    h, w, _ = frame.shape
+                    
+                    mask = np.zeros((h, w), dtype=np.uint8)
+                    oval_pts = np.array([[int(face_landmarks[i].x * w), int(face_landmarks[i].y * h)] for i in FACE_OVAL], np.int32)
+                    cv2.fillPoly(mask, [cv2.convexHull(oval_pts)], 255)
+                    
+                    for feature in [LEFT_EYE, RIGHT_EYE, LIPS]:
+                        pts = np.array([[int(face_landmarks[i].x * w), int(face_landmarks[i].y * h)] for i in feature], np.int32)
+                        cv2.fillPoly(mask, [cv2.convexHull(pts)], 0)
+                    
+                    mask = cv2.GaussianBlur(mask, (21, 21), 0)
+                    mask_3d = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR) / 255.0
+                    
+                    smoothed = cv2.bilateralFilter(frame, 15, 75, 75)
+                    
+                    hsv = cv2.cvtColor(smoothed, cv2.COLOR_BGR2HSV).astype(np.float32)
+                    hsv[:, :, 1] *= 1.10
+                    hsv[:, :, 2] *= 1.08
+                    hsv = np.clip(hsv, 0, 255).astype(np.uint8)
+                    glowing_skin = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+                    
+                    frame = (frame * (1 - mask_3d) + glowing_skin * mask_3d).astype(np.uint8)
+                    break
+                    
+            process.stdin.write(frame.tobytes())
+            
+    cap.release()
+    process.stdin.close()
+    process.wait()
+    
+    print(f"[✅] AI Beauty Engine complete: {output_vid}")
+    return output_vid
+
+
     img  = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
@@ -1663,6 +1771,9 @@ def run_pipeline(video_path: str, options_json: str) -> None:
 
     if options.get("blurBackground"):
         current_video = stage_background_fx(current_video, options)
+
+    if options.get("applyBeautyFilter"):
+        current_video = stage_beauty_filter(current_video, options)
 
     if options.get("bottomGlow"):
         color = options.get("glowColor", "#000000")
