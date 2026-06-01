@@ -17,13 +17,27 @@ async fn run_python_engine(
 
     let shell = app.shell();
     
-    // Tauri Sidecar logic - runs the compiled Python executable
-    let (mut rx, _child) = shell
-        .sidecar(process_type)
-        .map_err(|e| e.to_string())?
-        .args([video_path, options_json])
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    // In development (npm run tauri dev), use the raw Python script and venv.
+    // In production (npm run tauri build), use the compiled PyInstaller sidecar.
+    #[cfg(debug_assertions)]
+    let command = {
+        let python_path = if cfg!(windows) {
+            "../ai_engine/venv/Scripts/python.exe"
+        } else {
+            "../ai_engine/venv/bin/python"
+        };
+        let script_name = format!("../ai_engine/{}.py", process_type);
+        shell.command(python_path).args([script_name, video_path, options_json])
+    };
+
+    #[cfg(not(debug_assertions))]
+    let command = {
+        shell.sidecar(&process_type)
+            .map_err(|e| e.to_string())?
+            .args([video_path, options_json])
+    };
+
+    let (mut rx, _child) = command.spawn().map_err(|e| e.to_string())?;
 
     let mut full_output = String::new();
 
@@ -75,12 +89,25 @@ async fn run_nexus_engine(
 
     let merged_options = options.to_string();
 
-    let (mut rx, _child) = shell
-        .sidecar("nexus_engine")
-        .map_err(|e| e.to_string())?
-        .args([&merged_options, &output_path])
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    #[cfg(debug_assertions)]
+    let command = {
+        let python_path = if cfg!(windows) {
+            "../ai_engine/venv/Scripts/python.exe"
+        } else {
+            "../ai_engine/venv/bin/python"
+        };
+        let script_name = "../ai_engine/nexus_engine.py".to_string();
+        shell.command(python_path).args([script_name, merged_options.clone(), output_path.clone()])
+    };
+
+    #[cfg(not(debug_assertions))]
+    let command = {
+        shell.sidecar("nexus_engine")
+            .map_err(|e| e.to_string())?
+            .args([&merged_options, &output_path])
+    };
+
+    let (mut rx, _child) = command.spawn().map_err(|e| e.to_string())?;
 
     let mut full_output = String::new();
 

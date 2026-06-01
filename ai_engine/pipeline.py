@@ -275,6 +275,7 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
     p_class     = cap_options.get("captionPrimaryStyle", "p-clean-white")
     s_class     = cap_options.get("captionSecondaryStyle", "s-electric-teal")
     cap_bottom_pct = float(cap_options.get("captionBottomPercent", 22)) / 100.0
+    cap_scale      = float(cap_options.get("captionScale", 100)) / 100.0
     mixed_style = cap_options.get("captionMixedStyle", False)
 
     temp_audio = os.path.join(base_dir, "_whisper_audio.wav")
@@ -329,6 +330,7 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
 <meta charset="UTF-8">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Anton&family=Bangers&family=Great+Vibes&family=Montserrat:wght@800;900&family=Oswald:wght@700&family=Poppins:wght@800;900&display=swap');
+  @import url('https://fonts.cdnfonts.com/css/proxima-nova-2');
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   html, body {{ width: {width}px; height: {height}px; background: transparent; overflow: hidden; }}
   
@@ -409,8 +411,8 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
                     
                     const isHeavy = (word) => word.replace(/[^a-zA-Z0-9]/g, '').length > 4;
                     
-                    // 1. Start with a slightly smaller base size overall
-                    let baseSize = args.H * 0.045; 
+                    // 1. Start with a slightly smaller base size overall, multiplied by user scale
+                    let baseSize = args.H * 0.045 * args.scale; 
                     const totalChars = args.words.join('').length;
                     const wordCount = args.words.length;
 
@@ -480,7 +482,8 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
                 "font_family": font_family,
                 "p_class": p_class,
                 "s_class": s_class,
-                "mixed_style": mixed_style
+                "mixed_style": mixed_style,
+                "scale": cap_scale
             })
             page.screenshot(path=png_path, full_page=False, omit_background=True)
             rendered_done.add(key)
@@ -575,91 +578,139 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> list:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     import time
     import json
     import os
  
-    # Grab this from Google AI Studio (it's free)
-    api_key = api_key_opt or os.getenv("GEMINI_API_KEY")
-    if not api_key or api_key == "YOUR_FREE_API_KEY":
-        print("[⚠️] GEMINI_API_KEY not found in environment. Proceeding without forced alignment.")
+    raw_keys = []
+    if api_key_opt: raw_keys.append(("UI_PROVIDED_KEY", api_key_opt))
+    primary_key = os.getenv("GEMINI_API_KEY")
+    if primary_key: raw_keys.append(("GEMINI_API_KEY", primary_key))
+    bypass_key = os.getenv("GEMINI_API_KEY_BYPASS")
+    if bypass_key: raw_keys.append(("GEMINI_API_KEY_BYPASS", bypass_key))
+    autopass_key = os.getenv("GEMINI_API_KEY_AUTOPASS")
+    if autopass_key: raw_keys.append(("GEMINI_API_KEY_AUTOPASS", autopass_key))
+
+    keys_to_try = []
+    seen = set()
+    for name, k in raw_keys:
+        if k and k != "YOUR_FREE_API_KEY" and k not in seen:
+            seen.add(k)
+            keys_to_try.append((name, k))
+    
+    if not keys_to_try:
+        print("[⚠️] No valid GEMINI_API_KEY found. Proceeding without forced alignment.")
         return []
     
-    genai.configure(api_key=api_key)
-    print("[⚙️] Uploading audio to Gemini API...")
+    print(f"[⚙️] Will try {len(keys_to_try)} API key(s)...")
+
+    prompt = """
+    Listen to this audio. It is a mix of Sinhala and English (Singlish).
+    Write down EXACTLY what is said, verbatim.
     
-    try:
-        # 1. Upload the extracted .wav file to Gemini
-        audio_file = genai.upload_file(path=audio_path)
+    CRITICAL RULES: 
+    1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
+    2. Break the text into short, logical phrases of exactly 3 to 5 words each.
+    3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission" , "Grab Me"). 
+    4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").
+    5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්" , "වැඩ").
+    6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
+    7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.
+    8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:
+       - THE HOOK: The very first attention-grabbing statement or question.
+       - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").
+       - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.
+       DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.
+    
+    You must provide the approximate start and end times for each phrase in seconds.
+    Output strictly as a JSON array. Example:
+    [
+      {"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2},
+      {"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2},
+      {"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}
+    ]
+    Do not include any markdown formatting. Just the raw JSON array.
+    """
+
+    models_to_try = ['gemini-flash-latest', 'gemini-2.5-pro', 'gemini-2.5-flash']
+
+    for m_idx, model_name in enumerate(models_to_try):
+        for attempt, (key_name, api_key) in enumerate(keys_to_try):
+            if m_idx > 0 or attempt > 0:
+                print(f"\n[⚠️] Retrying with Model '{model_name}' and API Key '{key_name}' (Model {m_idx+1}/{len(models_to_try)}, Key {attempt+1}/{len(keys_to_try)})...")
+            
+            print(f"[⚙️] Uploading audio to Gemini API using key '{key_name}'...")
+            
+            try:
+                client = genai.Client(api_key=api_key)
+                # 1. Upload the extracted .wav file to Gemini
+                audio_file = client.files.upload(file=audio_path)
+                
+                # 2. Wait for processing (required for audio)
+                while getattr(audio_file.state, "name", audio_file.state) == "PROCESSING":
+                    print(".", end="", flush=True)
+                    time.sleep(2)
+                    audio_file = client.files.get(name=audio_file.name)
+                print("\n[✅] Audio processed by Gemini.")
         
-        # 2. Wait for processing (required for audio)
-        while audio_file.state.name == "PROCESSING":
-            print(".", end="", flush=True)
-            time.sleep(2)
-            audio_file = genai.get_file(audio_file.name)
-        print("\n[✅] Audio processed by Gemini.")
- 
-        # 3. Use Gemini Flash Latest (Universal free tier fallback)
-        model = genai.GenerativeModel('gemini-flash-latest')
- 
-        # 4. The strict prompt to prevent hallucination and force formatting
-        # 4. The strict prompt to prevent hallucination and force formatting
-        # 4. The strict prompt to prevent hallucination and force formatting
-        prompt = """
-        Listen to this audio. It is a mix of Sinhala and English (Singlish).
-        Write down EXACTLY what is said, verbatim.
+                # 4. Generate content
+                import threading
+                import sys
+                
+                done = False
+                def print_progress():
+                    while not done:
+                        sys.stdout.write(".")
+                        sys.stdout.flush()
+                        time.sleep(2)
+                        
+                print(f"[⚙️] Generating 99% accurate transcript with {model_name} (this can take 20-60s)", end="")
+                t = threading.Thread(target=print_progress)
+                t.start()
+                
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[prompt, audio_file],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json"
+                        )
+                    )
+                finally:
+                    done = True
+                    t.join()
+                    print()
+                
+                # Clean up the file from Google's servers
+                client.files.delete(name=audio_file.name)
+                
+                # Strip potential markdown formatting just in case
+                clean_text = response.text.replace('```json', '').replace('```', '').strip()
+                word_list = json.loads(clean_text)
+                print(f"[✅] Successfully extracted {len(word_list)} phrases from Gemini.")
+                
+                # --- NEW: PRINT EXACT GEMINI OUTPUT TO TERMINAL ---
+                preview_text = " ".join([w.get("phrase", w.get("word", "")) for w in word_list])
+                print("\n" + "="*50)
+                print("[🔍] RAW GEMINI TEXT DUMP:")
+                print(preview_text)
+                print("="*50 + "\n")
+                # --------------------------------------------------
         
-        CRITICAL RULES: 
-        1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
-        2. Break the text into short, logical phrases of exactly 3 to 5 words each.
-        3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission"). 
-        4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").
-        5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්").
-        6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
-        7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.
-        8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:
-           - THE HOOK: The very first attention-grabbing statement or question.
-           - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").
-           - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.
-           DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.
-        
-        You must provide the approximate start and end times for each phrase in seconds.
-        Output strictly as a JSON array. Example:
-        [
-          {"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2},
-          {"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2},
-          {"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}
-        ]
-        Do not include any markdown formatting. Just the raw JSON array.
-        """
- 
-        print("[⚙️] Generating 99% accurate transcript...")
-        response = model.generate_content(
-            [prompt, audio_file],
-            generation_config={"response_mime_type": "application/json"}
-        )
-        
-        # Clean up the file from Google's servers
-        genai.delete_file(audio_file.name)
-        
-        # Strip potential markdown formatting just in case
-        clean_text = response.text.replace('```json', '').replace('```', '').strip()
-        word_list = json.loads(clean_text)
-        print(f"[✅] Successfully extracted {len(word_list)} phrases from Gemini.")
-        
-        # --- NEW: PRINT EXACT GEMINI OUTPUT TO TERMINAL ---
-        preview_text = " ".join([w.get("phrase", w.get("word", "")) for w in word_list])
-        print("\n" + "="*50)
-        print("[🔍] RAW GEMINI TEXT DUMP:")
-        print(preview_text)
-        print("="*50 + "\n")
-        # --------------------------------------------------
- 
-        return word_list
-    except Exception as e:
-        print(f"[❌] Gemini API Error: {e}")
-        return []
+                return word_list
+            except Exception as e:
+                print(f"[❌] Gemini API Error with model {model_name} and key {api_key[:6]}...: {e}")
+                try:
+                    if 'audio_file' in locals() and hasattr(audio_file, 'name'):
+                        client.files.delete(name=audio_file.name)
+                except:
+                    pass
+                
+                # If we exhausted all keys for all models, give up
+                if m_idx == len(models_to_try) - 1 and attempt == len(keys_to_try) - 1:
+                    return []
  
 # ─────────────────────────────────────────────────────────────────────────────
 # DROP-IN REPLACEMENT: align_phrases_to_whisper + stage_burn_sinhala_captions
@@ -684,100 +735,104 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
 #             on screen until the next word begins (no flicker, no early exit).
 # ─────────────────────────────────────────────────────────────────────────────
 
-import bisect
-import statistics
-from typing import List, Dict, Tuple, Optional
-
-
-def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list) -> list:
+def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list, from_manual: bool = False) -> list:
     """
-    DYNAMIC TIME WARPING (Elastic Projection)
-    Fixes the "sometimes fast, sometimes slow" bug by treating Gemini's 
-    hallucinated timestamps as relative percentages, mapping them to 
-    Whisper's absolute real-world VAD timeline.
+    SMART ALIGNMENT ENGINE
+    - If from_manual=True: timestamps are already accurate, only apply gap-fill smoothing.
+    - If from_manual=False: apply Dynamic Time Warping (Elastic Projection) to fix
+      Gemini's hallucinated timestamps using Whisper anchors.
     """
     phrases = [p for p in gemini_phrases if p.get("phrase", "").strip()]
-    if not phrases: return []
-    
-    # If whisper failed entirely, return gemini as-is
-    if not whisper_words: 
-        return phrases
+    if not phrases:
+        return []
 
-    # Whisper anchors are guaranteed to be real spoken sound
+    # ── MANUAL JSON PATH: Trust the timestamps, just smooth the gaps ──────────
+    if from_manual or not whisper_words:
+        print("[⚙️] Manual JSON mode: trusting timestamps, applying gap-fill only...")
+        aligned = []
+        MIN_DUR = 0.40
+
+        for i, p in enumerate(phrases):
+            start = float(p.get("start", 0))
+            end   = float(p.get("end", start + 0.8))
+
+            # Enforce minimum duration
+            if end - start < MIN_DUR:
+                end = start + MIN_DUR
+
+            aligned.append({
+                "phrase": p["phrase"],
+                "start":  start,
+                "end":    end
+            })
+
+        # Gap-fill: stretch each caption to fill small silences before the next phrase
+        for i in range(len(aligned) - 1):
+            gap = aligned[i + 1]["start"] - aligned[i]["end"]
+            if 0 < gap <= 0.80:
+                aligned[i]["end"] += gap * 0.85
+
+        print(f"[✅] Manual alignment: {len(aligned)} phrases passed through with gap-fill.")
+        return aligned
+
+    # ── AUTO GEMINI PATH: Full Elastic Projection ─────────────────────────────
     anchors = sorted(whisper_words, key=lambda x: x["start"])
-    
-    # ── 1. Timeline Normalization ──
+
     g_starts = [float(p.get("start", 0)) for p in phrases]
     g_min, g_max = min(g_starts), max(g_starts)
-    
-    # Failsafe for 0-duration Gemini outputs
-    if g_max == g_min: g_max = g_min + 1.0 
+    if g_max == g_min:
+        g_max = g_min + 1.0
 
     w_starts = [float(a["start"]) for a in anchors]
     w_min, w_max = min(w_starts), max(w_starts)
-    if w_max == w_min: w_max = w_min + 1.0
+    if w_max == w_min:
+        w_max = w_min + 1.0
 
     aligned = []
     last_end = 0.0
-    MIN_DUR = 0.40
+    MIN_DUR  = 0.40
 
     for i, p in enumerate(phrases):
-        g_time = float(p.get("start", 0))
-        
-        # ── 2. Calculate Elastic Progress ──
-        # Where are we in the Gemini timeline? (0.0 to 1.0)
+        g_time   = float(p.get("start", 0))
         progress = (g_time - g_min) / (g_max - g_min)
-        
-        # Project this progress onto the Whisper absolute timeline
         projected_w_time = w_min + progress * (w_max - w_min)
-        
-        # ── 3. Forward-Only Snapping ──
-        # Find the nearest actual spoken anchor that hasn't been passed yet
+
         valid_anchors = [a for a in anchors if a["start"] >= last_end - 0.1]
-        
         if valid_anchors:
-            best_anchor = min(valid_anchors, key=lambda a: abs(a["start"] - projected_w_time))
+            best_anchor  = min(valid_anchors, key=lambda a: abs(a["start"] - projected_w_time))
             actual_start = best_anchor["start"]
         else:
             actual_start = max(last_end, projected_w_time)
 
-        # Strict overlap prevention
-        actual_start = max(actual_start, last_end) 
+        actual_start = max(actual_start, last_end)
 
-        # ── 4. Dynamic End Time Prediction ──
         if i + 1 < len(phrases):
-            next_g_time = float(phrases[i+1].get("start", g_time + 1.0))
-            next_prog = (next_g_time - g_min) / (g_max - g_min)
-            next_proj_w = w_min + next_prog * (w_max - w_min)
-            
-            valid_next = [a for a in anchors if a["start"] > actual_start]
+            next_g_time  = float(phrases[i + 1].get("start", g_time + 1.0))
+            next_prog    = (next_g_time - g_min) / (g_max - g_min)
+            next_proj_w  = w_min + next_prog * (w_max - w_min)
+            valid_next   = [a for a in anchors if a["start"] > actual_start]
             if valid_next:
                 next_anchor = min(valid_next, key=lambda a: abs(a["start"] - next_proj_w))
-                # Cut the caption right before the next word hits
-                actual_end = next_anchor["start"] - 0.05
+                actual_end  = next_anchor["start"] - 0.05
             else:
-                actual_end = next_proj_w - 0.05
+                actual_end  = next_proj_w - 0.05
         else:
-            # Last phrase caps at the final Whisper anchor
             actual_end = anchors[-1]["end"] if anchors[-1]["end"] > actual_start else actual_start + 1.0
 
-        # Enforce minimum readability duration
         if actual_end - actual_start < MIN_DUR:
             actual_end = actual_start + MIN_DUR
 
         aligned.append({
             "phrase": p["phrase"],
-            "start": actual_start,
-            "end": actual_end
+            "start":  actual_start,
+            "end":    actual_end
         })
         last_end = actual_end
 
-    # ── 5. Gap Fill Smoothing ──
-    # Stretches captions across micro-pauses so the screen doesn't flicker black
     for i in range(len(aligned) - 1):
         gap = aligned[i + 1]["start"] - aligned[i]["end"]
         if 0 < gap <= 0.80:
-            aligned[i]["end"] += gap * 0.85 
+            aligned[i]["end"] += gap * 0.85
 
     return aligned
 
@@ -805,6 +860,8 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     si_main_class = cap_options.get("siMainStyle", "si-main-blue")
     si_pri_class  = cap_options.get("siPrimaryStyle", "si-pri-silver")
     si_sec_class  = cap_options.get("siSecondaryStyle", "si-sec-gold")
+    cap_bottom_pct = float(cap_options.get("captionBottomPercent", 22)) / 100.0
+    cap_scale      = float(cap_options.get("captionScale", 100)) / 100.0
 
     # 1. Extract Audio
     temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
@@ -815,7 +872,16 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     )
 
     # 2. Get Perfect Phrases + Rough Timestamps from Gemini
-    gemini_phrases = get_perfect_sinhala_transcript(temp_audio, cap_options.get("geminiApiKey"))
+    manual_gemini_json = cap_options.get("manualGeminiJson", "").strip()
+    if cap_options.get("useManualGemini", False) and manual_gemini_json:
+        print("[⚙️] Manual Gemini JSON detected! Bypassing API call entirely.")
+        try:
+            gemini_phrases = json.loads(manual_gemini_json)
+        except Exception as e:
+            print(f"[❌] FATAL: Invalid manual JSON: {e}")
+            gemini_phrases = []
+    else:
+        gemini_phrases = get_perfect_sinhala_transcript(temp_audio, cap_options.get("geminiApiKey"))
 
     if not gemini_phrases:
         print("[❌] FATAL: Gemini failed. Cannot render captions.")
@@ -831,12 +897,15 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
         from faster_whisper import WhisperModel
         import importlib.util
         if os.name == 'nt':
-            for pkg in ["nvidia.cublas", "nvidia.cudnn"]:
-                spec = importlib.util.find_spec(pkg)
-                if spec and spec.submodule_search_locations:
-                    bin_path = os.path.join(spec.submodule_search_locations[0], "bin")
-                    if os.path.exists(bin_path):
-                        os.environ["PATH"] = bin_path + os.pathsep + os.environ.get("PATH", "")
+            try:
+                for pkg in ["nvidia.cublas", "nvidia.cudnn", "nvidia.cufft", "nvidia.curand", "nvidia.cusolver", "nvidia.cusparse", "nvidia.nvtx", "nvidia.nccl"]:
+                    spec = importlib.util.find_spec(pkg)
+                    if spec and spec.submodule_search_locations:
+                        bin_path = os.path.join(spec.submodule_search_locations[0], "bin")
+                        if os.path.exists(bin_path):
+                            os.environ["PATH"] = bin_path + os.pathsep + os.environ.get("PATH", "")
+            except Exception:
+                pass
 
         try:
             w_model = WhisperModel("base", device="cuda", compute_type="int8")
@@ -903,8 +972,8 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     flash_times = []
     for i, item in enumerate(segments_data):
         phrase_text = str(item.get("phrase", ""))
-        # If the AI marked this phrase with a full stop or question mark
-        if "." in phrase_text or "?" in phrase_text or "!" in phrase_text:
+        # If the AI marked this phrase with a director's cut pipe symbol "|"
+        if "|" in phrase_text:
             # We want the transition to hit exactly as the NEXT sentence starts
             if i + 1 < len(segments_data):
                 flash_times.append(float(segments_data[i+1]["start"]))
@@ -931,7 +1000,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   html, body {{ width: {width}px; height: {height}px; background: transparent; overflow: hidden; }}
   .caption-wrap {{
-    position: absolute; bottom: {int(height * 0.22)}px; left: 0; right: 0;
+    position: absolute; bottom: {int(height * cap_bottom_pct)}px; left: 0; right: 0;
     padding: 0 {int(width * 0.08)}px;
     text-align: center;
   }}
@@ -978,6 +1047,9 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
 
     segments_arr = []
 
+    # Point Playwright to the system-installed browsers since PyInstaller Temp doesn't bundle them
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright")
+    
     with sync_playwright() as p:
         browser = p.chromium.launch()
         context = browser.new_context(viewport={"width": W, "height": H}, device_scale_factor=1)
@@ -998,9 +1070,9 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
             png_path   = os.path.join(ovr_dir, f"cap_phrase_{i:04d}.png")
 
             char_count = len(phrase_text)
-            if   char_count <= 15: font_size = int(H * 0.055)
-            elif char_count <= 25: font_size = int(H * 0.045)
-            else:                  font_size = int(H * 0.038)
+            if   char_count <= 15: font_size = int(H * 0.055 * cap_scale)
+            elif char_count <= 25: font_size = int(H * 0.045 * cap_scale)
+            else:                  font_size = int(H * 0.038 * cap_scale)
 
             page.evaluate("""
                 (args) => {
@@ -1612,8 +1684,8 @@ def run_pipeline(video_path: str, options_json: str) -> None:
         else:
             export_captions_overlay_en(current_video, options)
 
-    if options.get("mp4ToMp3"):
-        stage_mp4_to_mp3(current_video, options)
+    if options.get("extractMp3"):
+        current_video = stage_mp4_to_mp3(current_video, options)
 
     print(f"\n[🚀] PIPELINE COMPLETE. Final output: {current_video}")
 

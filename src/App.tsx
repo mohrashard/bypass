@@ -33,6 +33,7 @@ export default function App() {
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPreviewVertical, setIsPreviewVertical] = useState(false);
+  const [showSafeZone, setShowSafeZone] = useState(false);
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
@@ -75,7 +76,10 @@ export default function App() {
     captionAnimation: 'spring-up',
     captionLanguage: 'en',
     captionBottomPercent: 22,
+    captionScale: 100,
     geminiApiKey: '',
+    useManualGemini: false,
+    manualGeminiJson: '',
 
     bgMode: 'blur',
     bgColor: '#09090b',
@@ -329,12 +333,46 @@ export default function App() {
                         </div>
 
                         {options.captionLanguage === 'si' && (
-                          <div className="flex flex-col gap-1 pb-2 mb-2 border-b border-zinc-800/50">
-                            <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">Gemini API Key (Required)</span>
-                            <input type="password" placeholder="Paste Google AI Studio Key..."
-                              value={options.geminiApiKey}
-                              onChange={(e) => setOptions((prev) => ({ ...prev, geminiApiKey: e.target.value }))}
-                              className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1.5 outline-none focus:border-orange-500 w-full" />
+                          <div className="flex flex-col gap-2 pb-2 mb-2 border-b border-zinc-800/50">
+                            
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">Gemini API Options</span>
+                              <label className="flex items-center gap-1 cursor-pointer">
+                                <input type="checkbox" checked={options.useManualGemini}
+                                  onChange={(e) => setOptions((prev) => ({ ...prev, useManualGemini: e.target.checked }))}
+                                  className="accent-orange-500 w-3 h-3 cursor-pointer" />
+                                <span className="text-[10px] text-zinc-300">Manual Override</span>
+                              </label>
+                            </div>
+
+                            {!options.useManualGemini ? (
+                              <input type="password" placeholder="Paste Google AI Studio Key..."
+                                value={options.geminiApiKey}
+                                onChange={(e) => setOptions((prev) => ({ ...prev, geminiApiKey: e.target.value }))}
+                                className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1.5 outline-none focus:border-orange-500 w-full" />
+                            ) : (
+                              <div className="flex flex-col gap-2 mt-1 bg-zinc-950 p-2 rounded border border-zinc-800">
+                                <p className="text-[10px] text-zinc-400 leading-tight">
+                                  1. Copy the prompt. 2. Upload your audio to Gemini Web. 3. Paste prompt. 4. Paste the resulting JSON array here.
+                                </p>
+                                <button 
+                                  onClick={async () => {
+                                    const prompt = `Listen to this audio. It is a mix of Sinhala and English (Singlish).\nWrite down EXACTLY what is said, verbatim.\n\nCRITICAL RULES: \n1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.\n2. Break the text into short, logical phrases of exactly 3 to 5 words each.\n3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission" , "Grab Me"). \n4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").\n5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්" , "වැඩ").\n6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.\n7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.\n8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:\n   - THE HOOK: The very first attention-grabbing statement or question.\n   - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").\n   - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.\n   DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.\n\nYou must provide the approximate start and end times for each phrase in seconds.\nOutput strictly as a JSON array. Example:\n[\n  {"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2},\n  {"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2},\n  {"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}\n]\nDo not include any markdown formatting. Just the raw JSON array.`;
+                                    await navigator.clipboard.writeText(prompt);
+                                    alert("Prompt copied to clipboard!");
+                                  }}
+                                  className="w-full bg-orange-600/20 text-orange-400 border border-orange-500/50 hover:bg-orange-500 hover:text-white transition-colors rounded py-1.5 text-xs font-semibold uppercase tracking-wider"
+                                >
+                                  Copy Prompt
+                                </button>
+                                <textarea
+                                  placeholder='Paste the raw JSON array here ([{"phrase": "...", "start": 0.0, "end": 1.0}])'
+                                  value={options.manualGeminiJson}
+                                  onChange={(e) => setOptions((prev) => ({ ...prev, manualGeminiJson: e.target.value }))}
+                                  className="bg-black border border-zinc-700 text-zinc-300 text-xs rounded p-2 outline-none focus:border-orange-500 w-full h-24 font-mono resize-none"
+                                />
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -347,6 +385,7 @@ export default function App() {
                                 onChange={(e) => setOptions((prev) => ({ ...prev, captionFont: e.target.value }))}
                                 className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-emerald-500">
                                 <option value="Montserrat">Montserrat (Modern)</option>
+                                <option value="Proxima Nova">Proxima Nova (Premium)</option>
                                 <option value="Anton">Anton (Bold/Blocky)</option>
                                 <option value="Poppins">Poppins (Clean)</option>
                                 <option value="Bangers">Bangers (Comic/Hype)</option>
@@ -392,7 +431,7 @@ export default function App() {
                               <label className="relative inline-flex items-center cursor-pointer">
                                 <input type="checkbox" className="sr-only peer"
                                   checked={options.captionMixedStyle}
-                                  onChange={() => toggleOption('captionMixedStyle')} 
+                                  onChange={() => toggleOption('captionMixedStyle')}
                                 />
                                 <div className="w-9 h-5 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
                               </label>
@@ -464,7 +503,6 @@ export default function App() {
                           <div className="flex items-center justify-between mb-1">
                             <div className="flex items-center gap-3">
                               <span className="text-xs text-sky-400 font-semibold uppercase tracking-wider">Position Preview</span>
-                              {/* ── NEW: Aspect Ratio Toggle Button ── */}
                               <button
                                 onClick={(e) => {
                                   e.preventDefault();
@@ -474,6 +512,18 @@ export default function App() {
                               >
                                 {isPreviewVertical ? '📱 9:16 View' : '🖥️ 16:9 View'}
                               </button>
+
+                              {isPreviewVertical && (
+                                <button
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    setShowSafeZone(!showSafeZone);
+                                  }}
+                                  className={`px-2 py-0.5 rounded text-[10px] transition-colors border flex items-center gap-1.5 shadow-sm active:scale-95 ${showSafeZone ? 'bg-fuchsia-600 border-fuchsia-500 text-white' : 'bg-zinc-800 border-zinc-600 text-zinc-300 hover:bg-zinc-700'}`}
+                                >
+                                  🛡️ Safe Zone
+                                </button>
+                              )}
                             </div>
                             <span className="text-xs text-zinc-400 font-mono">{options.captionBottomPercent}% from bottom</span>
                           </div>
@@ -500,6 +550,27 @@ export default function App() {
                               </div>
                             )}
 
+                            {/* ── TIKTOK SAFE ZONE OVERLAY ── */}
+                            {isPreviewVertical && showSafeZone && (
+                              <div className="absolute inset-0 pointer-events-none z-10 flex flex-col justify-between">
+                                {/* Top Overlay */}
+                                <div className="w-full bg-red-500/20 flex items-center justify-center text-[8px] font-bold text-white/50" style={{ height: '8%' }}>TOP ZONE</div>
+                                {/* Middle Section */}
+                                <div className="flex-1 flex justify-between">
+                                  {/* Left Overlay */}
+                                  <div className="bg-red-500/20" style={{ width: '5%' }}></div>
+
+                                  {/* Right Overlay */}
+                                  <div className="bg-red-500/20 flex items-center justify-center text-[8px] font-bold text-white/50" style={{ width: '12%' }}>UI</div>
+                                </div>
+                                {/* Bottom Overlay */}
+                                <div className="w-full bg-red-500/20 flex items-center justify-center text-[8px] font-bold text-white/50" style={{ height: '22%' }}>BOTTOM ZONE</div>
+
+                                {/* Inner Safe Area Border */}
+                                <div className="absolute top-[8%] bottom-[22%] left-[5%] right-[12%] border border-dashed border-green-500/60 rounded"></div>
+                              </div>
+                            )}
+
                             {/* The Floating Preview Tag */}
                             <div
                               className="absolute left-0 right-0 flex justify-center w-full transition-all duration-75 ease-out"
@@ -520,6 +591,18 @@ export default function App() {
                               className="flex-1 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
                             />
                             <span className="text-[10px] text-zinc-500 font-medium tracking-wider">TOP</span>
+                          </div>
+
+                          <div className="flex items-center gap-3 mt-1">
+                            <span className="text-[10px] text-zinc-500 font-medium tracking-wider">SMALL</span>
+                            <input
+                              type="range" min="50" max="200"
+                              value={options.captionScale}
+                              onChange={(e) => setOptions((prev) => ({ ...prev, captionScale: parseInt(e.target.value) }))}
+                              className="flex-1 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                            />
+                            <span className="text-[10px] text-zinc-500 font-medium tracking-wider">LARGE</span>
+                            <span className="text-xs text-zinc-400 font-mono w-10 text-right">{options.captionScale}%</span>
                           </div>
                         </div>
 
