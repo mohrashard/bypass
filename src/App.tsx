@@ -8,6 +8,8 @@ const NOISE_PATTERNS = [
   /UserWarning/, /FutureWarning/, /DeprecationWarning/,
   /warnings\.warn/, /Already up to date/, /^\s*warnings\.warn\(/,
   /will be changed to use/, /TorchCodec/, /We recommend that you port/,
+  /inference_feedback_manager/, /Created TensorFlow Lite XNNPACK delegate/,
+  /portable_clearcut_uploader/, /Source Location Trace/, /wireless\/android\/play/
 ];
 function isNoisyLine(line: string): boolean {
   return NOISE_PATTERNS.some((re) => re.test(line));
@@ -39,6 +41,8 @@ export default function App() {
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
   const [options, setOptions] = useState({
+    startingHook: 'none',
+    cinematicGrade: 'none',
     extractMp3: false,
     maskEngine: false,
     enable3dDepth: false, // 👈 NEW
@@ -93,17 +97,17 @@ export default function App() {
   });
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    (async () => {
-      unlisten = await listen<string>('engine-stdout', (event) => {
-        const raw = event.payload ?? '';
-        const incoming = raw.split('\n').filter(
-          (l) => l.trim().length > 0 && !isNoisyLine(l)
-        );
-        if (incoming.length > 0) setTerminalLines((prev) => [...prev, ...incoming]);
-      });
-    })();
-    return () => unlisten?.();
+    const unlistenPromise = listen<string>('engine-stdout', (event) => {
+      const raw = event.payload ?? '';
+      const incoming = raw.split('\n').filter(
+        (l) => l.trim().length > 0 && !isNoisyLine(l)
+      );
+      if (incoming.length > 0) setTerminalLines((prev) => [...prev, ...incoming]);
+    });
+
+    return () => {
+      unlistenPromise.then(unlisten => unlisten());
+    };
   }, []);
 
   useEffect(() => {
@@ -169,9 +173,21 @@ export default function App() {
         optionsJson: JSON.stringify(options),
       });
     } catch (error) {
-      setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
+      if (String(error).includes("terminated")) {
+        setTerminalLines((prev) => [...prev, '', `🛑 RENDER CANCELLED BY USER.`]);
+      } else {
+        setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
+      }
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleStopPipeline = async () => {
+    try {
+      await invoke('stop_engine');
+    } catch (error) {
+      console.error("Failed to stop engine:", error);
     }
   };
 
@@ -349,7 +365,7 @@ export default function App() {
 
                         {options.captionLanguage === 'si' && (
                           <div className="flex flex-col gap-2 pb-2 mb-2 border-b border-zinc-800/50">
-                            
+
                             <div className="flex items-center justify-between">
                               <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">Gemini API Options</span>
                               <label className="flex items-center gap-1 cursor-pointer">
@@ -370,7 +386,7 @@ export default function App() {
                                 <p className="text-[10px] text-zinc-400 leading-tight">
                                   1. Copy the prompt. 2. Upload your audio to Gemini Web. 3. Paste prompt. 4. Paste the resulting JSON array here.
                                 </p>
-                                <button 
+                                <button
                                   onClick={async () => {
                                     const prompt = `Listen to this audio. It is a mix of Sinhala and English (Singlish).\nWrite down EXACTLY what is said, verbatim.\n\nCRITICAL RULES: \n1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.\n2. Break the text into short, logical phrases of exactly 3 to 5 words each.\n3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission" , "Grab Me"). \n4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").\n5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්" , "වැඩ").\n6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.\n7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.\n8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:\n   - THE HOOK: The very first attention-grabbing statement or question.\n   - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").\n   - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.\n   DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.\n\nYou must provide the approximate start and end times for each phrase in seconds.\nOutput strictly as a JSON array. Example:\n[\n  {"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2},\n  {"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2},\n  {"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}\n]\nDo not include any markdown formatting. Just the raw JSON array.`;
                                     await navigator.clipboard.writeText(prompt);
@@ -757,6 +773,7 @@ export default function App() {
                             <option value="pro-max">📱 iPhone Pro Max (Natural)</option>
                             <option value="neon-blue">🟦 Neon Blue Studio (Moody)</option>
                             <option value="cyber-warm">🟧 Hollywood Teal & Orange</option>
+                            <option value="poth-rakke">🌴 Poth Rakke (Tropical Yellow)</option>
                           </select>
                         </div>
                       </div>
@@ -764,17 +781,78 @@ export default function App() {
                   </div>
                 ))}
               </div>
+
+              {/* ── CINEMATIC GRADE ENGINE ── */}
+              <div className="flex flex-col gap-3 p-3 rounded-lg bg-zinc-900/80 border border-zinc-800 mt-3">
+                <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/50">
+                  <span className="text-xs text-sky-400 font-semibold uppercase tracking-wider">Cinematic Grade Engine</span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-zinc-400 font-medium">The Pro Look</span>
+                  <select
+                    value={options.cinematicGrade}
+                    onChange={(e) => setOptions((prev) => ({ ...prev, cinematicGrade: e.target.value }))}
+                    className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-sky-500 font-medium max-w-[160px]"
+                  >
+                    <option value="none">⏹️ Off</option>
+                    <option value="capcut_studio">🎬 CapCut Studio</option>
+                    <option value="cinematic_cold">❄️ Cinematic Cold</option>
+                    <option value="warm_podcast">🎙️ Warm Podcast</option>
+                    <option value="blurred_bg">🌫️ Blurred BG</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* ── STARTING VISUAL HOOK ENGINE ── */}
+              <div className="flex flex-col gap-3 p-3 rounded-lg bg-zinc-900/80 border border-zinc-800 mt-3">
+                <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/50">
+                  <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">0-Second Hook Engine</span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-zinc-400 font-medium">Visual & SFX Impact</span>
+                  <select
+                    value={options.startingHook}
+                    onChange={(e) => setOptions((prev) => ({ ...prev, startingHook: e.target.value }))}
+                    className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-orange-500 font-medium max-w-[160px]"
+                  >
+                    <option value="none">⏹️ Off</option>
+                    <option value="capcut_drop">⬇️ CapCut Hologram Drop</option>
+                    <option value="drop_in">☄️ AE Drop-In (Elastic)</option>
+                    <option value="flash_drop">💥 AE Flash Drop</option>
+                    <option value="flash">⚡ Studio Bloom Flash</option>
+                    <option value="glitch">📺 Cyber Pixel-Sort</option>
+                    <option value="impact">🎬 Push-In Impact</option>
+                  </select>
+                </div>
+
+                {options.startingHook !== 'none' && (
+                  <p className="text-[10px] text-orange-400/80 italic mt-1 leading-tight">
+                    This will trigger a 350ms pattern-interrupt and mix in the corresponding SFX file at the exact moment the first frame of audio starts.
+                  </p>
+                )}
+              </div>
             </div>
 
-            <button onClick={handleRunPipeline}
-              disabled={!selectedFilePath || isBusy || activeCount === 0}
-              className="w-full py-4 rounded-xl font-bold text-base bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] shadow-[0_0_20px_rgba(5,150,105,0.35)] disabled:opacity-40 disabled:cursor-not-allowed transition-all">
-              {isProcessing ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="animate-spin">⚙️</span> Processing locally…
-                </span>
-              ) : 'RENDER VIDEO'}
-            </button>
+            {isProcessing ? (
+              <div className="flex gap-2">
+                <button disabled className="flex-1 py-4 rounded-xl font-bold text-base bg-emerald-600/40 text-white/50 cursor-not-allowed">
+                  <span className="flex items-center justify-center gap-2">
+                    <span className="animate-spin">⚙️</span> Processing locally…
+                  </span>
+                </button>
+                <button onClick={handleStopPipeline} className="px-6 py-4 rounded-xl font-bold text-base bg-red-600 hover:bg-red-500 shadow-[0_0_20px_rgba(220,38,38,0.35)] transition-all flex items-center justify-center gap-2 text-white">
+                  <span>🛑 Stop</span>
+                </button>
+              </div>
+            ) : (
+              <button onClick={handleRunPipeline}
+                disabled={!selectedFilePath || activeCount === 0}
+                className="w-full py-4 rounded-xl font-bold text-base bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] shadow-[0_0_20px_rgba(5,150,105,0.35)] disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+                RENDER VIDEO
+              </button>
+            )}
 
             {terminalLines.length > 0 && (
               <div className="bg-black border border-zinc-800 rounded-xl overflow-hidden">

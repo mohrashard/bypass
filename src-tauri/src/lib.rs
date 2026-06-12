@@ -1,4 +1,32 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use std::sync::{Arc, Mutex};
+use tauri_plugin_shell::process::CommandChild;
+
+struct EngineState {
+    process: Arc<Mutex<Option<CommandChild>>>,
+}
+
+#[tauri::command]
+async fn stop_engine(state: tauri::State<'_, EngineState>) -> Result<String, String> {
+    let mut process_lock = state.process.lock().unwrap();
+    if let Some(child) = process_lock.take() {
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &child.pid().to_string()])
+                .output();
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/IM", "ffmpeg.exe"])
+                .output();
+        }
+        
+        let _ = child.kill();
+        Ok("Process terminated".to_string())
+    } else {
+        Err("No process is running".to_string())
+    }
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -7,6 +35,7 @@ fn greet(name: &str) -> String {
 #[tauri::command]
 async fn run_python_engine(
     app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
     video_path: String,
     process_type: String,
     options_json: String,
@@ -37,7 +66,9 @@ async fn run_python_engine(
             .args([video_path, options_json])
     };
 
-    let (mut rx, _child) = command.spawn().map_err(|e| e.to_string())?;
+    let (mut rx, child) = command.spawn().map_err(|e| e.to_string())?;
+
+    *state.process.lock().unwrap() = Some(child);
 
     let mut full_output = String::new();
 
@@ -56,6 +87,7 @@ async fn run_python_engine(
                 let _ = app.emit("engine-stdout", out); // Use same event for simplicity or "engine-stderr"
             }
             CommandEvent::Terminated(payload) => {
+                *state.process.lock().unwrap() = None;
                 if payload.code == Some(0) {
                     return Ok(full_output);
                 } else {
@@ -72,6 +104,7 @@ async fn run_python_engine(
 #[tauri::command]
 async fn run_nexus_engine(
     app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
     html: String,
     output_path: String,
     options_json: String, // { duration, fps, width, height, bgColor }
@@ -107,7 +140,9 @@ async fn run_nexus_engine(
             .args([&merged_options, &output_path])
     };
 
-    let (mut rx, _child) = command.spawn().map_err(|e| e.to_string())?;
+    let (mut rx, child) = command.spawn().map_err(|e| e.to_string())?;
+
+    *state.process.lock().unwrap() = Some(child);
 
     let mut full_output = String::new();
 
@@ -124,6 +159,7 @@ async fn run_nexus_engine(
                 let _ = app.emit("nexus-stdout", out);
             }
             CommandEvent::Terminated(payload) => {
+                *state.process.lock().unwrap() = None;
                 if payload.code == Some(0) {
                     return Ok(output_path); // Return the final output path
                 } else {
@@ -143,10 +179,13 @@ async fn run_nexus_engine(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(EngineState {
+            process: Arc::new(Mutex::new(None)),
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, run_python_engine, run_nexus_engine])
+        .invoke_handler(tauri::generate_handler![greet, run_python_engine, run_nexus_engine, stop_engine])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

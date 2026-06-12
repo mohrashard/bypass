@@ -217,8 +217,10 @@ def stage_studio_audio(video_path: str) -> str:
             if os.path.exists(f): os.remove(f)
 
 
+
+
 # ─────────────────────────────────────────────
-# 4. PRO MAX CINEMATIC COLOR ENGINE
+# 4. PRO MAX CINEMATIC COLOR ENGINE (UPDATED)
 # ─────────────────────────────────────────────
 
 def stage_cinematic_color(video_path: str, color_options: dict) -> str:
@@ -233,6 +235,12 @@ def stage_cinematic_color(video_path: str, color_options: dict) -> str:
     elif grade_style == "cyber-warm":
         print("      ↳ Mode: Hollywood Teal & Orange")
         filter_chain = "colorbalance=rs=0.15:bs=-0.15:rm=0.10:bm=-0.10:rh=0.05:bh=-0.05,eq=contrast=1.10:saturation=1.20:gamma=0.90,unsharp=5:5:0.8:3:3:0.0"
+    # --- NEW "POTH RAKKE GRADING" STYLE ---
+    elif grade_style == "poth-rakke":
+        print("      ↳ Mode: Poth Rakke (Vibrant Tropical Yellow)")
+        # This pushes towards a bright, saturated look with a specific yellowish-orange wash.
+        filter_chain = "colorbalance=rs=0.10:gs=0.05:bs=-0.15:rm=0.10:bm=-0.15,eq=contrast=1.15:saturation=1.22:gamma=0.90,unsharp=5:5:0.8:3:3:0.0"
+    # --- END NEW STYLE ---
     else:
         print("      ↳ Mode: iPhone Pro Max (Smart HDR)")
         filter_chain = "eq=contrast=1.08:saturation=1.15:gamma=0.90,unsharp=5:5:0.8:3:3:0.0"
@@ -1739,6 +1747,694 @@ def stage_mp4_to_mp3(video_path: str, options: dict = None) -> str:
         raise
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# 17. CINEMATIC GRADE ENGINE — "The Pro Look"
+#     Replicates: BG replace · S-curve grade · skin warmth · vignette · sharpen
+#     Drop this BEFORE stage_starting_hook() in your pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+def stage_cinematic_grade(video_path: str, options: dict) -> str:
+    import cv2
+    import numpy as np
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision
+    import os, subprocess
+
+    grade_style = options.get("cinematicGrade", "none")
+    if grade_style == "none":
+        return video_path
+
+    print(f"[🎨] Cinematic Grade Engine — style: {grade_style}")
+
+    base_dir   = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_graded.mp4"
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # ── Style presets ─────────────────────────────────────────────────────
+    # Each preset defines:
+    #   bg_color  : (B, G, R) — solid studio backdrop
+    #   bg_blur   : blur radius on bg plate (0 = solid color, >0 = blurred real bg)
+    #   lift      : shadow lift amount (0.0–0.3)
+    #   saturation: color saturation multiplier
+    #   warmth    : red/yellow push on midtones (0.0–1.0)
+    #   contrast  : S-curve strength (0.0–1.0)
+    #   sharpen   : unsharp mask strength (0.0–1.0)
+    #   vignette  : vignette strength (0.0–1.0)
+
+    PRESETS = {
+        "capcut_studio": {
+            "bg_color":   (20, 38, 38),   # Deep teal — exactly what the CapCut vid used
+            "bg_blur":     0,
+            "lift":        0.06,
+            "saturation":  1.25,
+            "warmth":      0.18,
+            "contrast":    0.55,
+            "sharpen":     0.7,
+            "vignette":    0.55,
+        },
+        "cinematic_cold": {
+            "bg_color":   (28, 22, 18),   # Near-black, slight cool
+            "bg_blur":     0,
+            "lift":        0.04,
+            "saturation":  0.95,
+            "warmth":     -0.10,          # Negative = cooler push
+            "contrast":    0.65,
+            "sharpen":     0.5,
+            "vignette":    0.7,
+        },
+        "warm_podcast": {
+            "bg_color":   (20, 30, 50),   # Warm dark navy
+            "bg_blur":     0,
+            "lift":        0.08,
+            "saturation":  1.15,
+            "warmth":      0.25,
+            "contrast":    0.45,
+            "sharpen":     0.6,
+            "vignette":    0.45,
+        },
+        "blurred_bg": {
+            "bg_color":   None,           # Keep real bg — just blur it heavily
+            "bg_blur":     55,
+            "lift":        0.05,
+            "saturation":  1.2,
+            "warmth":      0.15,
+            "contrast":    0.5,
+            "sharpen":     0.65,
+            "vignette":    0.5,
+        },
+    }
+
+    p = PRESETS.get(grade_style, PRESETS["capcut_studio"])
+
+    # ── Load MediaPipe segmenter ──────────────────────────────────────────
+    model_path = os.path.join(engine_dir, "pretrained_models", "selfie_segmenter.tflite")
+    if not os.path.exists(model_path):
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        import urllib.request
+        urllib.request.urlretrieve(
+            "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite",
+            model_path)
+
+    base_options = mp_python.BaseOptions(model_asset_path=model_path)
+    seg_options  = vision.ImageSegmenterOptions(
+        base_options=base_options, output_confidence_masks=True)
+
+    # ── Build LUT helpers ─────────────────────────────────────────────────
+    def build_s_curve_lut(strength: float) -> np.ndarray:
+        x = np.arange(256, dtype=np.float32)
+        t = (x - 128.0) / 128.0
+        s = t / (1.0 + strength * (np.abs(t) - t * t))
+        out = np.clip((s * 128.0 + 128.0), 0, 255).astype(np.uint8)
+        return out
+
+    def build_lift_lut(lift: float) -> np.ndarray:
+        x = np.arange(256, dtype=np.float32)
+        out = np.clip(x + lift * 255.0, 0, 255).astype(np.uint8)
+        return out
+
+    def apply_lut(img: np.ndarray, lut: np.ndarray) -> np.ndarray:
+        return lut[img]
+
+    # ── Skin-tone aware warmth ────────────────────────────────────────────
+    def push_warmth(img_bgr: np.ndarray, amount: float) -> np.ndarray:
+        if abs(amount) < 0.01:
+            return img_bgr
+
+        ycbcr = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YCrCb)
+        Y, Cr, Cb = cv2.split(ycbcr)
+
+        skin_mask = (
+            (Y  > 60)  & (Y  < 240) &
+            (Cr > 128) & (Cr < 175) &
+            (Cb > 85)  & (Cb < 135)
+        ).astype(np.float32)
+
+        skin_mask = cv2.GaussianBlur(skin_mask, (21, 21), 7)
+
+        result = img_bgr.astype(np.float32)
+        if amount > 0:
+            result[:, :, 2] += skin_mask * amount * 30
+            result[:, :, 1] += skin_mask * amount * 10
+            result[:, :, 0] -= skin_mask * amount * 10
+        else:
+            result[:, :, 0] += skin_mask * abs(amount) * 25
+            result[:, :, 2] -= skin_mask * abs(amount) * 15
+
+        return np.clip(result, 0, 255).astype(np.uint8)
+
+    # ── Vignette ──────────────────────────────────────────────────────────
+    def make_vignette(h: int, w: int, strength: float) -> np.ndarray:
+        cx, cy = w / 2.0, h / 2.0
+        Y, X = np.ogrid[:h, :w]
+        dist = np.sqrt(((X - cx) / cx) ** 2 + ((Y - cy) / cy) ** 2)
+        vig = 1.0 - strength * np.clip(dist, 0.0, 1.0) ** 1.5
+        return vig.astype(np.float32)
+
+    # ── Unsharp mask ──────────────────────────────────────────────────────
+    def unsharp_mask(img: np.ndarray, strength: float) -> np.ndarray:
+        blur = cv2.GaussianBlur(img, (0, 0), 3.0)
+        return cv2.addWeighted(img, 1.0 + strength, blur, -strength, 0)
+
+    # ── Per-frame grade function ──────────────────────────────────────────
+    s_lut   = build_s_curve_lut(p["contrast"])
+    lift_lut = build_lift_lut(p["lift"])
+
+    def grade_frame(frame: np.ndarray, mask_confidence: np.ndarray) -> np.ndarray:
+        h, w = frame.shape[:2]
+        
+        hard_mask  = (mask_confidence > 0.5).astype(np.uint8)
+        soft_mask  = cv2.GaussianBlur(
+            (mask_confidence > 0.35).astype(np.float32), (21, 21), 7
+        )[:, :, np.newaxis]
+
+        if p["bg_color"] is not None:
+            bg = np.full_like(frame, p["bg_color"], dtype=np.uint8)
+        else:
+            bg = cv2.GaussianBlur(frame, (p["bg_blur"] | 1, p["bg_blur"] | 1), 0)
+
+        composite = (frame.astype(np.float32) * soft_mask
+                     + bg.astype(np.float32) * (1.0 - soft_mask))
+        composite = np.clip(composite, 0, 255).astype(np.uint8)
+
+        if abs(p["saturation"] - 1.0) > 0.01:
+            hsv = cv2.cvtColor(composite, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1] * p["saturation"], 0, 255)
+            composite = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+        sm1 = soft_mask[:, :, 0]
+        warmed_subject = push_warmth(composite, p["warmth"])
+        composite = (warmed_subject.astype(np.float32) * sm1[:, :, np.newaxis]
+                     + composite.astype(np.float32) * (1 - sm1[:, :, np.newaxis]))
+        composite = np.clip(composite, 0, 255).astype(np.uint8)
+
+        composite = apply_lut(composite, s_lut)
+        composite = apply_lut(composite, lift_lut)
+
+        if p["sharpen"] > 0.01:
+            sharpened = unsharp_mask(composite, p["sharpen"])
+            composite = (sharpened.astype(np.float32) * sm1[:, :, np.newaxis]
+                         + composite.astype(np.float32) * (1 - sm1[:, :, np.newaxis]))
+            composite = np.clip(composite, 0, 255).astype(np.uint8)
+
+        if p["vignette"] > 0.01:
+            vig = make_vignette(h, w, p["vignette"])[:, :, np.newaxis]
+            composite = np.clip(
+                composite.astype(np.float32) * vig, 0, 255
+            ).astype(np.uint8)
+
+        return composite
+
+    cap    = cv2.VideoCapture(video_path)
+    fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    temp_no_audio = os.path.splitext(video_path)[0] + "_grade_temp.mp4"
+    try:
+        subprocess.run(["ffmpeg", "-f", "lavfi", "-i", "nullsrc", "-c:v", "h264_nvenc", "-t", "1", "-f", "null", "-"], check=True, capture_output=True)
+        cvcodec = "h264_nvenc"
+        preset = "p6"
+        cq_args = ["-cq", "18"]
+    except:
+        cvcodec = "libx264"
+        preset = "superfast"
+        cq_args = ["-crf", "17"]
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-s", f"{width}x{height}",
+        "-pix_fmt", "bgr24",
+        "-r", str(fps),
+        "-i", "-",
+        "-c:v", cvcodec,
+        "-preset", preset
+    ] + cq_args + [
+        "-pix_fmt", "yuv420p",
+        temp_no_audio
+    ]
+    writer = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    with vision.ImageSegmenter.create_from_options(seg_options) as segmenter:
+        import gc
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            res    = segmenter.segment(mp_img)
+
+            if res.confidence_masks:
+                mask = np.squeeze(res.confidence_masks[0].numpy_view()).copy()
+                graded = grade_frame(frame, mask)
+            else:
+                graded = unsharp_mask(frame, p["sharpen"] * 0.5)
+                
+            del res
+            del mp_img
+
+            writer.stdin.write(graded.tobytes())
+            frame_idx += 1
+            if frame_idx % 30 == 0:
+                print(f"  [🎨] {frame_idx}/{total} frames graded...")
+                gc.collect()
+
+    cap.release()
+    writer.stdin.close()
+    writer.wait()
+
+    print("[🎨] Re-muxing audio...")
+    subprocess.run([
+        "ffmpeg",
+        "-i", temp_no_audio,
+        "-i", video_path,
+        "-c:v", "copy",
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-shortest",
+        output_vid, "-y"
+    ], check=True, capture_output=True)
+
+    os.remove(temp_no_audio)
+    print(f"[✅] Cinematic grade done → {output_vid}")
+    return output_vid
+
+
+# 16. HEADLESS CSS VISUAL HOOK ENGINE (Playwright + Web Animations)
+#     "The Subject Arrives" — AE/TikTok Grade via HTML DOM Compositing
+# ─────────────────────────────────────────────────────────────────────────────
+def stage_starting_hook(video_path: str, options: dict) -> str:
+    import cv2
+    import numpy as np
+    import mediapipe as mp
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision
+    from playwright.sync_api import sync_playwright
+    import os, subprocess, base64
+
+    hook_type = options.get("startingHook", "none")
+    if hook_type == "none":
+        return video_path
+
+    print(f"[⚙️] Booting CSS Headless Hook Engine — {hook_type}")
+    base_dir   = os.path.dirname(os.path.abspath(video_path))
+    temp_vid   = os.path.join(base_dir, "_temp_hook.mp4")
+    output_vid = os.path.splitext(video_path)[0] + "_hook.mp4"
+    frames_dir = os.path.join(base_dir, "_hook_frames")
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+
+    os.makedirs(frames_dir, exist_ok=True)
+
+    # ── 1. MediaPipe: Extract Background & Subject ────────────────────────
+    model_path = os.path.join(engine_dir, "pretrained_models", "selfie_segmenter.tflite")
+    if not os.path.exists(model_path):
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        import urllib.request
+        urllib.request.urlretrieve(
+            "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite",
+            model_path)
+
+    base_options = mp_python.BaseOptions(model_asset_path=model_path)
+    seg_options  = vision.ImageSegmenterOptions(base_options=base_options, output_confidence_masks=True)
+
+    cap    = cv2.VideoCapture(video_path)
+    fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    dur    = 0.35  # 350ms snappy cinematic intro
+    hook_frames = int(fps * dur)
+
+    # Grab the first non-black frame
+    first_frame = None
+    for _ in range(30):
+        ret, frame = cap.read()
+        if not ret: break
+        if np.mean(frame) > 5.0:
+            first_frame = frame
+            break
+
+    if first_frame is None:
+        cap.release(); return video_path
+
+    with vision.ImageSegmenter.create_from_options(seg_options) as segmenter:
+        rgb    = cv2.cvtColor(first_frame, cv2.COLOR_BGR2RGB)
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        res    = segmenter.segment(mp_img)
+
+        if not res.confidence_masks:
+            cap.release(); return video_path
+
+        raw_mask   = np.squeeze(res.confidence_masks[0].numpy_view())
+        hard_mask  = (raw_mask > 0.5).astype(np.uint8) * 255
+        
+        # Feather the mask slightly for clean CSS compositing
+        soft_mask = cv2.GaussianBlur(hard_mask.astype(np.float32), (15, 15), 5) / 255.0
+        
+        # Create transparent PNG of the subject
+        subject_rgba = np.zeros((height, width, 4), dtype=np.uint8)
+        subject_rgba[:, :, :3] = first_frame
+        subject_rgba[:, :, 3] = (soft_mask * 255).astype(np.uint8)
+        
+        # --- PRO AE TRICK: Clean Plate ---
+        kernel = np.ones((15, 15), np.uint8)
+        inpaint_mask = cv2.dilate(hard_mask, kernel, iterations=1)
+        bg_clean = cv2.inpaint(first_frame, inpaint_mask, 3, cv2.INPAINT_TELEA)
+        
+        # We do NOT blur or darken the background. The background remains untouched.
+        
+        # Encode to Base64 to inject directly into HTML DOM
+        _, sub_buf = cv2.imencode('.png', subject_rgba)
+        sub_b64 = base64.b64encode(sub_buf).decode('utf-8')
+        
+        _, bg_buf = cv2.imencode('.jpg', bg_clean, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        bg_b64 = base64.b64encode(bg_buf).decode('utf-8')
+
+    # ── 2. The HTML/CSS Render Engine ─────────────────────────────────────
+    html_template = f"""<!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="UTF-8">
+    <style>
+      * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+      body {{ width: {width}px; height: {height}px; background: #000; overflow: hidden; position: relative; }}
+      
+      .layer {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform-origin: center center; }}
+      
+      /* Background enhancements */
+      #bg {{ z-index: 1; will-change: transform, filter; }}
+      #bg-overlay {{
+          position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2;
+          background: radial-gradient(circle at center, transparent 20%, rgba(0,0,0,0.85) 100%);
+          mix-blend-mode: multiply;
+      }}
+      
+      #subject-container {{ z-index: 10; position: absolute; top: 0; left: 0; width: 100%; height: 100%; perspective: 1500px; }}
+      
+      /* The base subject */
+      #subject {{ width: 100%; height: 100%; object-fit: cover; will-change: transform, filter; transform-style: preserve-3d; }}
+      
+      /* The Echo and Glitch Clones */
+      .glitch-clone {{ 
+         position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; 
+         opacity: 0; will-change: transform, filter, opacity; 
+      }}
+      
+      /* Frame 1: The X-Ray Invert Layer */
+      #xray-layer {{
+          position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;
+          mix-blend-mode: exclusion; /* Forces the raw CapCut negative look */
+          filter: invert(1) contrast(3.5) saturate(0) brightness(1.8);
+          opacity: 0; z-index: 15;
+      }}
+      
+      #cinematic-flash {{ 
+         position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+         background: radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 1) 0%, rgba(255,255,255,0) 80%);
+         mix-blend-mode: overlay; opacity: 0; z-index: 20; pointer-events: none;
+      }}
+    </style>
+    </head>
+    <body>
+      <img id="bg" class="layer" src="data:image/jpeg;base64,{bg_b64}">
+      <div id="bg-overlay"></div>
+      <div id="cinematic-flash"></div>
+      
+      <div id="subject-container">
+        <img id="clone1" class="glitch-clone" src="data:image/png;base64,{sub_b64}">
+        <img id="clone2" class="glitch-clone" src="data:image/png;base64,{sub_b64}">
+        <img id="clone3" class="glitch-clone" src="data:image/png;base64,{sub_b64}">
+        
+        <img id="rgb-red" class="glitch-clone" style="mix-blend-mode: screen;" src="data:image/png;base64,{sub_b64}">
+        <img id="rgb-cyan" class="glitch-clone" style="mix-blend-mode: screen;" src="data:image/png;base64,{sub_b64}">
+        
+        <img id="xray-layer" src="data:image/png;base64,{sub_b64}">
+        
+        <img id="subject" src="data:image/png;base64,{sub_b64}">
+      </div>
+
+      <script>
+        function renderFrame(progress, hookType) {{
+            const bg = document.getElementById('bg');
+            const sub = document.getElementById('subject');
+            const c1 = document.getElementById('clone1');
+            const c2 = document.getElementById('clone2');
+            const c3 = document.getElementById('clone3');
+            const rRed = document.getElementById('rgb-red');
+            const rCyan = document.getElementById('rgb-cyan');
+            const xray = document.getElementById('xray-layer');
+            const cflash = document.getElementById('cinematic-flash');
+
+            const easeOutExpo = t => t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+            const easeOutQuint = t => 1 - Math.pow(1 - t, 5);
+            
+            // ── AFTER EFFECTS PARALLAX BACKGROUND ──
+            // Creates a cinematic Z-space push-in while pulling focus, blending back to normal
+            let blendOut = easeOutQuint(Math.max(0, (progress - 0.5) * 2)); // Fades from 0 to 1 in the second half
+            let bgScale = 1.05 + ((1 - blendOut) * 0.05); // Smooth subtle zoom
+            let bgBlur = (1 - easeOutQuint(progress)) * 12; // Focus pull from blurry to sharp
+            bg.style.transform = `scale(${{bgScale}})`;
+            bg.style.filter = `blur(${{bgBlur}}px) brightness(${{0.6 + progress * 0.4}})`;
+            
+            // ── PREMIUM SUBJECT BASE STYLE ──
+            // The shadow tightens and fades as the subject lands, perfectly stitching into the main video
+            let shadowSpread = (1 - blendOut) * 60;
+            let shadowOpacity = (1 - blendOut) * 0.9;
+            let rimOpacity = (1 - blendOut) * 0.15;
+            let contrastBoost = 1.0 + (1 - blendOut) * 0.05;
+            let premiumSubjectShadow = `drop-shadow(0px 30px ${{shadowSpread}}px rgba(0, 0, 0, ${{shadowOpacity}})) drop-shadow(0px 0px 15px rgba(255, 255, 255, ${{rimOpacity}})) contrast(${{contrastBoost}})`;
+
+            if (hookType === 'capcut_drop') {{
+                if (progress < 0.15) {{
+                    let noiseX = (Math.random() - 0.5) * 50;
+                    let noiseY = (Math.random() - 0.5) * 20;
+                    
+                    sub.style.opacity = 0; 
+                    
+                    xray.style.opacity = 0.9;
+                    xray.style.transform = `scale(1.12) translate(${{noiseX}}px, ${{noiseY}}px)`;
+                    
+                    rRed.style.opacity = 0.9;
+                    rRed.style.transform = `scale(1.15) translateX(35px) translateY(-10px)`;
+                    rRed.style.filter = `drop-shadow(25px 0 0 red) hue-rotate(-45deg) contrast(1.2)`;
+                    
+                    rCyan.style.opacity = 0.9;
+                    rCyan.style.transform = `scale(1.15) translateX(-35px) translateY(10px)`;
+                    rCyan.style.filter = `drop-shadow(-25px 0 0 cyan) hue-rotate(45deg) contrast(1.2)`;
+                    
+                    cflash.style.opacity = 0.4;
+                }}
+                else if (progress >= 0.15 && progress < 0.50) {{
+                    let dropP = (progress - 0.15) / 0.35; 
+                    let e = easeOutExpo(dropP);
+                    let yOff = (1 - e) * -900; 
+                    let scaleBoost = 1.0 + (1 - e) * 0.2;
+                    
+                    xray.style.opacity = 0; rRed.style.opacity = 0; rCyan.style.opacity = 0;
+                    
+                    sub.style.opacity = 1;
+                    sub.style.transform = `translateY(${{yOff}}px) scale(${{scaleBoost}})`;
+                    sub.style.filter = `${{premiumSubjectShadow}} brightness(${{1.0 + (1-e)*0.5}})`;
+                    
+                    c1.style.opacity = (1 - e) * 0.7;
+                    c1.style.transform = `translateY(${{yOff - 120}}px) scaleY(${{1.1 + (1-e)*0.2}}) scaleX(${{scaleBoost}})`;
+                    c1.style.filter = `blur(10px) opacity(0.8) brightness(1.4) drop-shadow(0 20px 20px cyan)`;
+                    
+                    c2.style.opacity = (1 - e) * 0.4;
+                    c2.style.transform = `translateY(${{yOff - 250}}px) scaleY(${{1.2 + (1-e)*0.3}}) scaleX(${{scaleBoost}})`;
+                    c2.style.filter = `blur(20px) opacity(0.5) brightness(1.2) drop-shadow(0 20px 20px magenta)`;
+                    
+                    cflash.style.opacity = 0;
+                }}
+                else {{
+                    sub.style.opacity = 1;
+                    sub.style.transform = `translateY(0) scale(1)`; 
+                    // Preserve the premium look after the drop
+                    sub.style.filter = premiumSubjectShadow; 
+                    
+                    c1.style.opacity = 0; c2.style.opacity = 0;
+                    rRed.style.opacity = 0; rCyan.style.opacity = 0; xray.style.opacity = 0;
+                    cflash.style.opacity = 0;
+                }}
+            }}
+            
+            else if (hookType === 'drop_in') {{
+                let decay = easeOutExpo(progress);
+                let yOff = (1 - decay) * -1000; 
+                let scaleY = 1.0 + ((1 - decay) * 0.8);
+                let scaleX = 1.0 - ((1 - decay) * 0.1);
+                let bloom = 1 - progress; 
+                
+                sub.style.transform = `translateY(${{yOff}}px) scale(${{scaleX}}, ${{scaleY}})`;
+                sub.style.filter = `${{premiumSubjectShadow}} drop-shadow(0px 0px ${{40*bloom}}px rgba(255, 255, 255, ${{bloom*0.8}})) brightness(${{1 + bloom*0.4}})`;
+                
+                c1.style.opacity = (1 - decay) * 0.6;
+                c1.style.transform = `translateY(${{yOff - 80}}px) scale(${{scaleX}}, ${{scaleY}})`;
+                c1.style.filter = `blur(8px) brightness(1.5)`;
+
+                c2.style.opacity = (1 - decay) * 0.3;
+                c2.style.transform = `translateY(${{yOff - 160}}px) scale(${{scaleX}}, ${{scaleY}})`;
+                c2.style.filter = `blur(12px) brightness(1.2)`;
+                if(c3) c3.style.opacity = 0;
+                cflash.style.opacity = bloom * 0.9;
+            }}
+            
+            else if (hookType === 'flash_drop') {{
+                let decay = easeOutExpo(progress);
+                let zOff = (1 - decay) * 600; 
+                let yOff = (1 - decay) * -200;
+                let bloom = 1 - progress;
+                
+                sub.style.transform = `translateY(${{yOff}}px) translateZ(${{zOff}}px)`;
+                sub.style.filter = `${{premiumSubjectShadow}} drop-shadow(0px 0px ${{50*bloom}}px rgba(255, 240, 200, ${{bloom}})) brightness(${{1 + bloom*0.5}})`;
+
+                let burst = progress / 0.5;
+                if (burst <= 1) {{
+                    c1.style.opacity = 1 - burst;
+                    c1.style.transform = `scale(${{1.0 + burst*0.2}})`;
+                    c1.style.filter = `brightness(1.5) blur(4px)`;
+                }} else {{
+                    c1.style.opacity = 0;
+                }}
+                c2.style.opacity = 0; if(c3) c3.style.opacity = 0;
+                cflash.style.opacity = bloom * 0.9;
+            }}
+
+            else if (hookType === 'flash') {{
+                let decay = easeOutExpo(progress);
+                let bloom = 1 - progress;
+                
+                let scale = 1.0 + (progress * 0.05); 
+                sub.style.transform = `scale(${{scale}})`;
+                
+                sub.style.filter = `${{premiumSubjectShadow}} drop-shadow(0px 0px ${{60*bloom}}px rgba(255, 255, 255, ${{bloom*0.9}})) brightness(${{1 + bloom*0.6}})`;
+                
+                c1.style.opacity = 0; c2.style.opacity = 0; if(c3) c3.style.opacity = 0;
+                cflash.style.opacity = bloom * 0.9;
+            }}
+
+            else if (hookType === 'glitch') {{
+                let decay = 1 - progress; 
+                let bloom = 1 - progress;
+                
+                if (decay > 0.05) {{
+                    let isHard = Math.random() > 0.5;
+                    let shift = 30 * decay;
+                    
+                    c1.style.opacity = 0.7 * decay;
+                    c1.style.transform = `translateX(${{shift}}px)`;
+                    c1.style.filter = `hue-rotate(-90deg) saturate(3) brightness(1.2)`;
+                    c1.style.clipPath = `inset(${{Math.random()*80}}% 0 ${{Math.random()*80}}% 0)`;
+
+                    c2.style.opacity = 0.7 * decay;
+                    c2.style.transform = `translateX(${{-shift}}px)`;
+                    c2.style.filter = `hue-rotate(90deg) saturate(3) brightness(1.2)`;
+                    c2.style.clipPath = `inset(${{Math.random()*80}}% 0 ${{Math.random()*80}}% 0)`;
+
+                    sub.style.opacity = 1;
+                    sub.style.transform = `translate(${{(Math.random()-0.5)*15*decay}}px, 0px)`;
+                    
+                    if (isHard) sub.style.clipPath = `polygon(0 ${{Math.random()*15}}%, 100% ${{Math.random()*15}}%, 100% 100%, 0 100%)`;
+                    else sub.style.clipPath = 'none';
+                }} else {{
+                    c1.style.opacity = 0; c2.style.opacity = 0;
+                    sub.style.opacity = 1; sub.style.transform = 'none';
+                    sub.style.clipPath = 'none';
+                }}
+                
+                sub.style.filter = `${{premiumSubjectShadow}} drop-shadow(0px 0px ${{30*bloom}}px rgba(0, 255, 255, ${{bloom*0.5}})) brightness(${{1 + bloom*0.3}})`;
+                if(c3) c3.style.opacity = 0;
+                cflash.style.opacity = bloom * 0.9;
+            }}
+
+            else if (hookType === 'impact') {{
+                let decay = 1 - easeOutExpo(progress);
+                let bloom = 1 - progress;
+                
+                let scale = 1.0 + (decay * 0.2);
+                let shakeX = (Math.random() - 0.5) * 30 * decay;
+                let shakeY = (Math.random() - 0.5) * 30 * decay;
+                
+                sub.style.transform = `translate(${{shakeX}}px, ${{shakeY}}px) scale(${{scale}})`;
+                sub.style.filter = `${{premiumSubjectShadow}} drop-shadow(0px 0px ${{50*bloom}}px rgba(255, 200, 200, ${{bloom*0.6}})) brightness(${{1 + bloom*0.4}})`;
+                
+                c1.style.opacity = decay * 0.6;
+                c1.style.transform = `translate(${{shakeX - 15*decay}}px, ${{shakeY}}px) scale(${{scale}})`;
+                c1.style.filter = `hue-rotate(-90deg) brightness(1.2)`;
+
+                c2.style.opacity = decay * 0.6;
+                c2.style.transform = `translate(${{shakeX + 15*decay}}px, ${{shakeY}}px) scale(${{scale}})`;
+                c2.style.filter = `hue-rotate(90deg) brightness(1.2)`;
+                
+                if(c3) c3.style.opacity = 0;
+                cflash.style.opacity = bloom * 0.9;
+            }}
+        }}
+      </script>
+    </body>
+    </html>"""
+    # ── 3. Frame Rendering via Playwright ─────────────────────────────────
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright")
+    
+    print("[⚙️] Stepping CSS frames in headless Chrome...")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1)
+        page = context.new_page()
+        page.set_content(html_template, wait_until="load")
+
+        for i in range(hook_frames):
+            progress = i / max(hook_frames - 1, 1)
+            page.evaluate(f"renderFrame({progress}, '{hook_type}')")
+            page.screenshot(path=os.path.join(frames_dir, f"frame_{i:04d}.png"), type="png")
+            
+        browser.close()
+
+    # ── 4. FFmpeg Compositing ─────────────────────────────────────────────
+    print("[⚙️] Re-compositing sequence with audio...")
+    sfx_map   = {"flash":"flash_sfx.MP3","flash_drop":"flash_sfx.MP3", "drop_in":"impact_sfx.MP3","glitch":"glitch_sfx.MP3","impact":"impact_sfx.MP3", "capcut_drop":"glitch_sfx.MP3"}
+    sfx_audio = os.path.join(engine_dir, "assets", sfx_map.get(hook_type, ""))
+    has_sfx   = os.path.exists(sfx_audio)
+
+    # Convert PNG sequence to temporary MP4
+    subprocess.run([
+        "ffmpeg", "-framerate", str(fps), "-i", os.path.join(frames_dir, "frame_%04d.png"),
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", temp_vid, "-y"
+    ], check=True, capture_output=True)
+
+    # Overlay temp video over main video for duration, mix SFX
+    fc = (f"[0:v]tpad=start_duration={dur}:start_mode=clone[v_main];"
+          f"[v_main][1:v]overlay=eof_action=pass[v_out];"
+          f"[0:a]adelay={int(dur*1000)}:all=1[main_a]")
+    
+    if has_sfx:
+        fc += f";[2:a]volume=1.5[sfx];[main_a][sfx]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[a_final]"
+        amap = "[a_final]"
+    else:
+        amap = "[main_a]"
+
+    shared = ["-filter_complex", fc, "-map", "[v_out]", "-map", amap, "-c:a", "aac", "-b:a", "192k", output_vid, "-y"]
+    base_cmd = ["ffmpeg", "-i", video_path, "-i", temp_vid]
+    if has_sfx: base_cmd += ["-i", sfx_audio]
+
+    subprocess.run(base_cmd + ["-c:v", "libx264", "-preset", "fast", "-crf", "17"] + shared, check=True, capture_output=True)
+
+    # Cleanup
+    if os.path.exists(temp_vid): os.remove(temp_vid)
+    import shutil
+    shutil.rmtree(frames_dir, ignore_errors=True)
+    cap.release()
+    
+    print(f"[✅] CSS Hook sequence rendered → {output_vid}")
+    return output_vid
+
 # ─────────────────────────────────────────────
 # 14. MAIN PIPELINE ORCHESTRATION
 # ─────────────────────────────────────────────
@@ -1757,6 +2453,15 @@ def run_pipeline(video_path: str, options_json: str) -> None:
     if options.get("removeSilence"):
         current_video = stage_remove_silence(current_video, options)
 
+    if options.get("cinematicColor"):
+        current_video = stage_cinematic_color(current_video, options)
+
+    if options.get("cinematicGrade") and options.get("cinematicGrade") != "none":
+        current_video = stage_cinematic_grade(current_video, options)
+
+    if options.get("startingHook") and options.get("startingHook") != "none":
+        current_video = stage_starting_hook(current_video, options)
+
     if options.get("aiBroll"):
         current_video = stage_ai_broll(current_video, options)
 
@@ -1766,8 +2471,6 @@ def run_pipeline(video_path: str, options_json: str) -> None:
     if options.get("autoZoom"):
         current_video = stage_semantic_zoom(current_video, options)
 
-    if options.get("cinematicColor"):
-        current_video = stage_cinematic_color(current_video, options)
 
     if options.get("blurBackground"):
         current_video = stage_background_fx(current_video, options)
