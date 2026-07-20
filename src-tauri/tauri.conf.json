@@ -40,6 +40,9 @@
     "externalBin": [
       "pipeline",
       "nexus_engine"
+    ],
+    "resources": [
+      "resources/**/*"
     ]
   }
 }

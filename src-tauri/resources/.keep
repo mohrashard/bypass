@@ -1,0 +1,2 @@
+# This file ensures the resources folder is not empty so Tauri builds successfully.
+# Put ffmpeg.exe, ffprobe.exe, and pw-browsers folder in this directory!

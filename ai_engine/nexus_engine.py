@@ -10,6 +10,12 @@ import asyncio
 import io
 import tempfile
 
+# ─── PyInstaller App Compilation Fixes ─────────────
+if hasattr(sys, '_MEIPASS'):
+    exe_dir = os.path.dirname(sys.executable)
+    os.environ["PATH"] = sys._MEIPASS + os.pathsep + exe_dir + os.pathsep + os.environ.get("PATH", "")
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(exe_dir, "pw-browsers")
+
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 
 
@@ -185,16 +191,15 @@ async def render_html_to_mp4(
 
         print(f"[✅] Animation initialized. Starting frame capture...")
 
-        # ── FFmpeg pipe ───────────────────────────────────────────────────
         ffmpeg_cmd = [
             "ffmpeg", "-y",
             "-f", "image2pipe",
             "-vcodec", "png",
             "-framerate", str(fps),
             "-i", "pipe:0",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "14",
+            "-c:v", "h264_nvenc",
+            "-preset", "p4",
+            "-cq", "18",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             "-vf", f"scale={width}:{height}:flags=lanczos",

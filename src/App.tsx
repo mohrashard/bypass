@@ -40,6 +40,9 @@ export default function App() {
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+
   const [options, setOptions] = useState({
     startingHook: 'none',
     cinematicGrade: 'none',
@@ -87,11 +90,15 @@ export default function App() {
     geminiApiKey: '',
     useManualGemini: false,
     manualGeminiJson: '',
+    manualSrtText: '',
 
     bgMode: 'blur',
     bgColor: '#09090b',
     bgImagePath: '',
     bgImageName: '',
+    bgScale: 100,
+    subjectScale: 100,
+    subjectY: 0,
     keyingMode: 'ai',
     colorGradeStyle: 'pro-max',
   });
@@ -125,6 +132,41 @@ export default function App() {
       setTerminalLines([]);
     }
   };
+
+  const handleLivePreview = async () => {
+    if (!selectedFilePath) {
+      alert("Please select a video file first");
+      return;
+    }
+    try {
+      setIsPreviewLoading(true);
+      const out = await invoke<string>('run_python_engine', {
+        videoPath: selectedFilePath,
+        processType: 'preview_engine',
+        optionsJson: JSON.stringify(options),
+      });
+      const match = out.match(/\[PREVIEW_READY\] (.*)/);
+      if (match && match[1]) {
+        const pPath = match[1].trim();
+        setPreviewSrc(convertFileSrc(pPath) + "?t=" + Date.now());
+      } else {
+        console.error("Preview failed:", out);
+      }
+    } catch (e) {
+      console.error("Preview exception:", e);
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  };
+
+  // Automatically update the live preview when sliders are moved (with debounce)
+  useEffect(() => {
+    if (!previewSrc || isPreviewLoading) return;
+    const timer = setTimeout(() => {
+      handleLivePreview();
+    }, 400); // 400ms debounce so we don't overwhelm FFmpeg while dragging
+    return () => clearTimeout(timer);
+  }, [options.bgScale, options.subjectScale, options.subjectY, options.bgImagePath, options.bgMode]);
 
   const handleSelectBgImage = async () => {
     const selected = await open({
@@ -337,14 +379,56 @@ export default function App() {
                           </div>
                         )}
                         {options.bgMode === 'image' && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-zinc-400 font-medium">Background File</span>
-                            <button onClick={handleSelectBgImage}
-                              className={`text-xs px-3 py-1.5 rounded border transition-colors max-w-[140px] truncate ${options.bgImagePath
-                                ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-400'
-                                : 'bg-zinc-950 border-zinc-700 hover:border-zinc-500 text-zinc-300'}`}>
-                              {options.bgImageName || 'Choose Image...'}
-                            </button>
+                          <div className="flex flex-col gap-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-zinc-400 font-medium">Background File</span>
+                              <button onClick={handleSelectBgImage}
+                                className={`text-xs px-3 py-1.5 rounded border transition-colors max-w-[140px] truncate ${options.bgImagePath
+                                  ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-400'
+                                  : 'bg-zinc-950 border-zinc-700 hover:border-zinc-500 text-zinc-300'}`}>
+                                {options.bgImageName || 'Choose Image...'}
+                              </button>
+                            </div>
+                            
+                            {/* NEW: Compositing Controls */}
+                            <div className="flex flex-col gap-2 pt-2 border-t border-zinc-800/50 mt-1">
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] text-zinc-500 font-medium tracking-wider min-w-[70px]">BG ZOOM</span>
+                                <input type="range" min="100" max="250" value={options.bgScale} onChange={(e) => setOptions((prev) => ({ ...prev, bgScale: parseInt(e.target.value) }))} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500" />
+                                <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{options.bgScale}%</span>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] text-zinc-500 font-medium tracking-wider min-w-[70px]">SUBJ SIZE</span>
+                                <input type="range" min="30" max="150" value={options.subjectScale} onChange={(e) => setOptions((prev) => ({ ...prev, subjectScale: parseInt(e.target.value) }))} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+                                <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{options.subjectScale}%</span>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] text-zinc-500 font-medium tracking-wider min-w-[70px]">SUBJ Y-POS</span>
+                                <input type="range" min="-100" max="100" value={options.subjectY} onChange={(e) => setOptions((prev) => ({ ...prev, subjectY: parseInt(e.target.value) }))} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+                                <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{options.subjectY > 0 ? '+' : ''}{options.subjectY}%</span>
+                              </div>
+                              <div className="flex gap-2 mt-2">
+                                <button 
+                                  onClick={() => setOptions(prev => ({ ...prev, bgScale: 100, subjectScale: 100, subjectY: 0 }))}
+                                  className="text-[10px] uppercase font-bold tracking-wider py-1.5 px-3 bg-zinc-800/50 hover:bg-zinc-700/50 text-zinc-400 hover:text-zinc-300 rounded border border-zinc-800/80 transition-colors w-1/3">
+                                  Reset
+                                </button>
+                                <button 
+                                  onClick={handleLivePreview} 
+                                  disabled={isPreviewLoading}
+                                  className="text-[10px] uppercase font-bold tracking-wider py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded border border-zinc-700 flex-1 disabled:opacity-50 transition-colors">
+                                  {isPreviewLoading ? 'Generating...' : 'Load Live Preview Frame'}
+                                </button>
+                              </div>
+                              {previewSrc && (
+                                <div className="mt-2 w-full max-h-[350px] bg-zinc-950 border border-zinc-800 rounded overflow-hidden flex items-center justify-center relative group">
+                                  <img src={previewSrc} alt="Preview" className="w-full h-full object-contain" />
+                                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <button onClick={() => setPreviewSrc(null)} className="text-xs text-white/80 bg-white/10 px-3 py-1.5 rounded-full hover:bg-white/20 hover:text-white">Close Preview</button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -360,8 +444,21 @@ export default function App() {
                             className="bg-purple-950/30 border border-purple-900/50 text-purple-300 text-xs rounded p-1 outline-none focus:border-purple-500 font-medium">
                             <option value="en">🇺🇸 English (Whisper)</option>
                             <option value="si">🇱🇰 Sinhala (Gemini+Whisper)</option>
+                            <option value="manual_srt">📝 Manual Subtitles (SRT)</option>
                           </select>
                         </div>
+
+                        {options.captionLanguage === 'manual_srt' && (
+                          <div className="flex flex-col gap-2 pb-2 mb-2 border-b border-zinc-800/50">
+                            <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">Paste Subtitles</span>
+                            <textarea
+                              placeholder="Paste formatted SRT with timings here..."
+                              value={options.manualSrtText}
+                              onChange={(e) => setOptions((prev) => ({ ...prev, manualSrtText: e.target.value }))}
+                              className="bg-black border border-zinc-700 text-zinc-300 text-xs rounded p-2 outline-none focus:border-orange-500 w-full h-32 font-mono resize-none"
+                            />
+                          </div>
+                        )}
 
                         {options.captionLanguage === 'si' && (
                           <div className="flex flex-col gap-2 pb-2 mb-2 border-b border-zinc-800/50">
@@ -408,7 +505,7 @@ export default function App() {
                         )}
 
                         {/* ── ENGLISH TEMPLATES ── */}
-                        {options.captionLanguage === 'en' && (
+                        {(options.captionLanguage === 'en' || options.captionLanguage === 'manual_srt') && (
                           <>
                             <div className="flex items-center justify-between">
                               <span className="text-xs text-zinc-400 font-medium">Typography</span>
