@@ -357,7 +357,8 @@ export default function App() {
                             onChange={(e) => setOptions((prev) => ({ ...prev, keyingMode: e.target.value }))}
                             className="bg-purple-950/30 border border-purple-900/50 text-purple-300 text-xs rounded p-1 outline-none focus:border-purple-500 font-medium">
                             <option value="ai">🧠 AI Auto-Detect</option>
-                            <option value="chroma">🟩 Green Screen</option>
+                            <option value="chroma">🟩 FFmpeg Hard Key</option>
+                            <option value="webgl">🌐 WebGL Soft Key (GPU)</option>
                           </select>
                         </div>
                         <div className="flex items-center justify-between">
@@ -871,6 +872,7 @@ export default function App() {
                             <option value="neon-blue">🟦 Neon Blue Studio (Moody)</option>
                             <option value="cyber-warm">🟧 Hollywood Teal & Orange</option>
                             <option value="poth-rakke">🌴 Poth Rakke (Tropical Yellow)</option>
+                            <option value="studio-blue">🔵 Studio Blue Backdrop (Skin-Safe)</option>
                           </select>
                         </div>
                       </div>

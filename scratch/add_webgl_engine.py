@@ -1,100 +1,31 @@
-import sys
-import json
 import os
-import subprocess
-import cv2
+import re
 
-def log(msg):
-    pass
+pipeline_path = r"C:\Projects\capcut-bypass\ai_engine\pipeline.py"
+with open(pipeline_path, 'r', encoding='utf-8') as f:
+    content = f.read()
 
-def generate_preview(video_path: str, options_json: str):
-    log("=== RUNNING PREVIEW ENGINE ===")
-    log(f"Options: {options_json}")
-    try:
-        options = json.loads(options_json)
-    except Exception as e:
-        log(f"JSON Parse Error: {e}")
-        return
-        
-    bg_options = options
-    mode = bg_options.get("bgMode", "blur")
-    hex_color = bg_options.get("bgColor", "#09090b").lstrip('#')
-    bg_image_path = bg_options.get("bgImagePath", "")
-    keying_mode = bg_options.get("keyingMode", "ai")
-    
-    bg_scale = int(bg_options.get("bgScale", 100))
-    sub_scale = int(bg_options.get("subjectScale", 100))
-    sub_y = int(bg_options.get("subjectY", 0))
-
-    base_dir = os.path.dirname(os.path.abspath(video_path))
-    preview_img = os.path.join(base_dir, "_live_preview.jpg")
-
-    cap = cv2.VideoCapture(video_path)
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap.release()
-    
-    if os.path.exists(preview_img): 
-        os.remove(preview_img)
-        log("Deleted old preview image.")
-    
-    log(f"Keying Mode: {keying_mode}, BG Mode: {mode}, BG Path: {bg_image_path}")
-    
-    if keying_mode == "chroma":
-        chroma_filter = "chromakey=0x1A9535:0.11:0.02,despill=green"
-        sub_w = int(w * sub_scale / 100)
-        sub_h = int(h * sub_scale / 100)
-        sub_w = sub_w if sub_w % 2 == 0 else sub_w + 1
-        sub_h = sub_h if sub_h % 2 == 0 else sub_h + 1
-        
-        fg_filter = f"[0:v]{chroma_filter}[fg];[fg]scale={sub_w}:{sub_h}[fg_scaled]"
-        y_offset = f"+(H*{sub_y}/100)" if sub_y != 0 else ""
-        overlay_cmd = f"overlay=(W-w)/2:H-h{y_offset}:shortest=1,format=yuv420p"
-
-        if mode == "blur":
-            filter_complex = f"[0:v]boxblur=25:25,colorchannelmixer=rr=0.7:gg=0.7:bb=0.7[bg];{fg_filter};[bg][fg_scaled]{overlay_cmd}[outv]"
-            inputs = ["-i", video_path]
-        elif mode == "image" and bg_image_path and os.path.exists(bg_image_path):
-            bg_w = int(w * (bg_scale / 100.0))
-            bg_h = int(h * (bg_scale / 100.0))
-            filter_complex = f"[1:v]scale={bg_w}:{bg_h}:force_original_aspect_ratio=increase,crop={w}:{h}[bg];{fg_filter};[bg][fg_scaled]{overlay_cmd}[outv]"
-            inputs = ["-i", video_path, "-loop", "1", "-i", bg_image_path]
-            log("Using custom image background filter_complex.")
-        else:
-            ff_color = hex_color if len(hex_color) == 6 else "09090b"
-            filter_complex = f"color=c=#{ff_color}:s={w}x{h}:d=9999[bg];{fg_filter};[bg][fg_scaled]{overlay_cmd}[outv]"
-            inputs = ["-i", video_path]
-            log("Using solid color background filter_complex.")
-            
-        cmd = [
-            "ffmpeg", "-ss", "00:00:02", *inputs, 
-            "-filter_complex", filter_complex,
-            "-map", "[outv]", "-vframes", "1", preview_img, "-y", "-update", "1"
-        ]
-        log(f"FFmpeg CMD: {' '.join(cmd)}")
-        
-        try:
-            subprocess.run(cmd, check=True, capture_output=True)
-            log("FFmpeg completed successfully.")
-            print(f"[PREVIEW_READY] {preview_img}")
-        except subprocess.CalledProcessError as e:
-            err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
-            log(f"FFmpeg Error: {err_msg}")
-            print(f"[❌] Preview Generation Failed:\n{err_msg}")
-
+webgl_code = """
+    # ── WebGL GPU Soft Key Path (Playwright) ──────────────────────────────
     elif keying_mode == "webgl":
-        log("WebGL Mode selected, rendering preview via Playwright.")
+        print("[🌐] Booting WebGL Browser Engine for Cinematic Soft Keying...")
         from playwright.sync_api import sync_playwright
-        import pathlib
+        import urllib.parse
+        import json
         
-        vid_uri = pathlib.Path(video_path).as_uri()
+        cap.release()
+        out.release()
+        if os.path.exists(temp_vid): os.remove(temp_vid)
+        
+        # Convert paths to file URIs for browser
+        vid_uri = "file:///" + urllib.parse.quote(video_path.replace("\\\\", "/"))
         bg_uri = ""
         if mode == "image" and bg_image_path and os.path.exists(bg_image_path):
-            bg_uri = pathlib.Path(bg_image_path).as_uri()
+            bg_uri = "file:///" + urllib.parse.quote(bg_image_path.replace("\\\\", "/"))
         
         bg_hex = hex_color if mode == "color" else "09090b"
         
-        html_content = f"""
+        html_content = f\"\"\"
         <!DOCTYPE html>
         <html>
         <head>
@@ -111,7 +42,7 @@ def generate_preview(video_path: str, options_json: str):
                 const vid = document.getElementById('vid');
                 const bg = document.getElementById('bg');
                 const canvas = document.getElementById('glcanvas');
-                const gl = canvas.getContext('webgl', {{ preserveDrawingBuffer: true }});
+                const gl = canvas.getContext('webgl');
                 
                 const vsSource = `
                     attribute vec4 aVertexPosition;
@@ -135,24 +66,21 @@ def generate_preview(video_path: str, options_json: str):
                         vec4 color = texture2D(uSampler, vTextureCoord);
                         vec4 bg = uUseBgImage == 1 ? texture2D(uBgSampler, vTextureCoord) : vec4(0.0, 0.0, 0.0, 0.0);
                         
-                        // Robust Green Screen Math: measures how much stronger Green is than Red and Blue
-                        float maxRB = max(color.r, color.b);
-                        float gDiff = color.g - maxRB;
+                        // Distance to green screen color (0x1A9535 -> 26, 149, 53)
+                        vec3 keyColor = vec3(26.0/255.0, 149.0/255.0, 53.0/255.0);
+                        float diff = distance(color.rgb, keyColor);
                         
-                        // The higher gDiff, the greener the pixel.
-                        // If it's barely green (< 0.03), it's opaque foreground.
-                        // If it's clearly green (> 0.12), it's transparent background.
-                        float alpha = 1.0 - smoothstep(0.03, 0.12, gDiff);
+                        // Soft alpha ramp
+                        float alpha = smoothstep(0.10, 0.25, diff);
                         
-                        // Despill: neutralize green fringe on the edges
-                        if (color.g > maxRB) {{
-                            // Pull green down to the level of Red/Blue smoothly based on how "green" the pixel was
-                            float despillFactor = clamp(gDiff / 0.15, 0.0, 1.0);
-                            color.g = mix(color.g, maxRB, despillFactor);
+                        // Despill: limit green to max of red and blue
+                        if (color.g > color.r && color.g > color.b) {{
+                            color.g = max(color.r, color.b);
                         }}
                         
                         vec4 finalColor = vec4(color.rgb, alpha);
                         if (uUseBgImage == 1) {{
+                            // premultiply alpha for mix
                             gl_FragColor = mix(bg, vec4(color.rgb, 1.0), alpha);
                         }} else {{
                             gl_FragColor = vec4(color.rgb * alpha, alpha);
@@ -209,8 +137,6 @@ def generate_preview(video_path: str, options_json: str):
                 gl.uniform1i(uSampler, 0);
                 gl.uniform1i(uBgSampler, 1);
                 
-                gl.viewport(0, 0, canvas.width, canvas.height);
-                
                 let bgLoaded = !bg.src || bg.src.endsWith('null') || bg.src === '';
                 if (!bgLoaded) {{
                     bg.onload = () => {{
@@ -225,72 +151,106 @@ def generate_preview(video_path: str, options_json: str):
                     startProcessing();
                 }}
                 
+                let mediaRecorder;
+                let chunks = [];
+                
                 function startProcessing() {{
-                    vid.onseeked = () => {{
-                        gl.activeTexture(gl.TEXTURE0);
-                        gl.bindTexture(gl.TEXTURE_2D, vidTexture);
-                        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, vid);
-                        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-                        window.renderComplete = true;
-                    }};
-                    
-                    if (vid.readyState >= 1) {{ 
-                        vid.currentTime = 2.0; 
-                    }} else {{
-                        vid.onloadedmetadata = () => {{
-                            vid.currentTime = 2.0;
-                        }};
+                    if (!bgLoaded) return;
+                    if (bg.src && bg.src !== window.location.href && !bg.src.endsWith('null') && bg.src !== '') {{
+                        gl.uniform1i(uUseBgImage, 1);
                     }}
+                    
+                    vid.play().then(() => {{
+                        const stream = canvas.captureStream(60);
+                        mediaRecorder = new MediaRecorder(stream, {{ mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 16000000 }});
+                        mediaRecorder.ondataavailable = e => chunks.push(e.data);
+                        mediaRecorder.onstop = () => {{
+                            const blob = new Blob(chunks, {{ type: 'video/webm' }});
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'webgl_render.webm';
+                            a.click();
+                            window.renderComplete = true;
+                        }};
+                        mediaRecorder.start();
+                        renderLoop();
+                    }});
                 }}
+                
+                function renderLoop() {{
+                    if (vid.paused || vid.ended) {{
+                        if (mediaRecorder.state === 'recording') mediaRecorder.stop();
+                        return;
+                    }}
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, vidTexture);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, vid);
+                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                    requestAnimationFrame(renderLoop);
+                }}
+                
+                vid.onended = () => {{
+                    if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+                }};
             </script>
         </body>
         </html>
-        """
+        \"\"\"
         
-        webgl_html_path = os.path.join(base_dir, "_webgl_preview.html")
+        webgl_html_path = os.path.join(base_dir, "_webgl_keyer.html")
+        webgl_webm_path = os.path.join(base_dir, "_webgl_render.webm")
         with open(webgl_html_path, "w", encoding="utf-8") as f:
             f.write(html_content)
             
+        print("[⚙️] Running headless WebGL compositor via GPU...")
+        
+        # We must use specific flags to force hardware GPU rendering in headless mode
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright")
         with sync_playwright() as p:
             browser = p.chromium.launch(
-                channel="chrome",
                 headless=True,
                 args=[
                     "--use-gl=desktop",
                     "--enable-webgl",
                     "--ignore-gpu-blocklist",
                     "--autoplay-policy=no-user-gesture-required",
-                    "--disable-web-security",
-                    "--allow-file-access-from-files"
+                    "--disable-web-security"
                 ]
             )
             page = browser.new_page(
                 viewport={"width": w, "height": h},
-                device_scale_factor=1
+                device_scale_factor=1,
+                accept_downloads=True
             )
             
-            page.goto(pathlib.Path(webgl_html_path).as_uri())
-            page.wait_for_function("window.renderComplete === true", timeout=30000)
-            
-            # Screenshot the canvas
-            page.locator("canvas").screenshot(path=preview_img)
+            # Setup download intercept
+            with page.expect_download(timeout=300000) as download_info:
+                page.goto("file:///" + urllib.parse.quote(webgl_html_path.replace("\\\\", "/")))
+                # Wait for the recording to finish and trigger download
+                page.wait_for_function("window.renderComplete === true", timeout=300000)
+                
+            download = download_info.value
+            download.save_as(webgl_webm_path)
             browser.close()
             
-        if os.path.exists(webgl_html_path): os.remove(webgl_html_path)
-        print(f"[PREVIEW_READY] {preview_img}")
+        print("[⚙️] Remuxing WebGL WebM with original audio...")
+        subprocess.run([
+            "ffmpeg", "-i", webgl_webm_path, "-i", temp_audio,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-c:a", "aac", "-b:a", "192k",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-shortest", output_vid, "-y"
+        ], check=True, capture_output=True)
+        
+        for f in [webgl_html_path, webgl_webm_path, temp_audio]:
+            if os.path.exists(f): os.remove(f)
+            
+        print(f"[✅] Background FX applied (WebGL): {output_vid}")
+        return output_vid
+"""
 
-    else:
-        log("AI Mode selected, returning un-keyed frame.")
-        cap = cv2.VideoCapture(video_path)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 50)
-        success, frame = cap.read()
-        if success:
-            cv2.imwrite(preview_img, frame)
-            print(f"[PREVIEW_READY] {preview_img}")
-            log("Saved un-keyed frame.")
-        cap.release()
-
-if __name__ == "__main__":
-    if len(sys.argv) > 2:
-        generate_preview(sys.argv[1], sys.argv[2])
+if webgl_code not in content:
+    content = content.replace("    # ── MediaPipe AI Segmentation Path ───────────────────────────────────", webgl_code + "\n    # ── MediaPipe AI Segmentation Path ───────────────────────────────────")
+    with open(pipeline_path, 'w', encoding='utf-8') as f:
+        f.write(content)
