@@ -31,6 +31,7 @@ const OPTIONS_META: Record<string, string> = {
   applyBeautyFilter: '✨ Custom Beauty Filter',
   bottomGlow: '🌌 Cinematic Bottom Glow',
   autoTransitions: '✨ Auto Sentence Transitions',
+  enhanceAiImage: '🖼️ AI Image Watermark Remover',
 };
 
 export default function App() {
@@ -47,6 +48,7 @@ export default function App() {
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   const [options, setOptions] = useState({
+    enhanceAiImage: false,
     hookEngine: false,
     hookPrimaryText: '',
     hookSecondaryText: '',
@@ -147,11 +149,11 @@ export default function App() {
   const handleSelectFile = async () => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm'] }],
+      filters: [{ name: 'Media', extensions: ['mp4', 'mov', 'mkv', 'webm', 'jpg', 'jpeg', 'png', 'webp'] }],
     }).catch(() => null);
     if (selected && typeof selected === 'string') {
       setSelectedFilePath(selected);
-      setSelectedFileName(selected.split(/[\\/]/).pop() ?? 'video.mp4');
+      setSelectedFileName(selected.split(/[\\/]/).pop() ?? 'media');
       setTerminalLines([]);
     }
   };
@@ -345,8 +347,8 @@ export default function App() {
               ) : (
                 <div className="text-center space-y-2">
                   <span className="text-4xl">📁</span>
-                  <p className="font-medium">Click to select your raw video</p>
-                  <p className="text-sm text-zinc-500">MP4, MOV, MKV, WEBM</p>
+                  <p className="font-medium">Click to select your raw video or image</p>
+                  <p className="text-sm text-zinc-500">MP4, MOV, MKV, WEBM, JPG, PNG, WEBP</p>
                 </div>
               )}
             </div>

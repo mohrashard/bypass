@@ -251,8 +251,8 @@ async def render_html_to_mp4(
         # EGL/GPU accel — Linux only
         chromium_args += ["--use-gl=egl", "--enable-gpu"]
     else:
-        # Windows: software renderer is more reliable in headless
-        chromium_args += ["--disable-gpu"]
+        # Windows: Enable GPU for massive speedup in DOM/Canvas rendering
+        chromium_args += ["--enable-gpu"]
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -327,20 +327,21 @@ async def render_html_to_mp4(
             
         ffmpeg_cmd.extend([
             "-movflags", "+faststart",
-            "-vf", f"scale={width}:{height}:flags=lanczos",
             output_path,
-        ]
-        )
+        ])
 
         print(f"[⚙️] Opening FFmpeg pipe → {os.path.basename(output_path)}")
-        ffmpeg_proc = subprocess.Popen(
-            ffmpeg_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        ffmpeg_proc = await asyncio.create_subprocess_exec(
+            *ffmpeg_cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
         print(f"[🎬] Rendering {total_frames} frames...")
+
+        import base64
+        client = await page.context.new_cdp_session(page)
 
         errors = 0
         for frame_idx in range(total_frames):
@@ -349,13 +350,15 @@ async def render_html_to_mp4(
             await page.evaluate(f"window.__nexusSeek({time_ms:.4f})")
 
             try:
-                jpeg_bytes = await page.screenshot(
-                    type="jpeg",
-                    quality=100,
-                    clip={"x": 0, "y": 0, "width": width, "height": height},
-                    animations="disabled",
-                )
+                # Fast CDP screenshot (quality 100 for maximum fidelity)
+                res = await client.send("Page.captureScreenshot", {
+                    "format": "jpeg",
+                    "quality": 100
+                })
+                jpeg_bytes = base64.b64decode(res["data"])
+                
                 ffmpeg_proc.stdin.write(jpeg_bytes)
+                await ffmpeg_proc.stdin.drain()
             except Exception as e:
                 errors += 1
                 print(f"[⚠️] Frame {frame_idx} screenshot failed: {e}")
@@ -370,7 +373,9 @@ async def render_html_to_mp4(
 
         print(f"[⚙️] All frames sent. Finalizing MP4...")
         ffmpeg_proc.stdin.close()
-        _, stderr = ffmpeg_proc.communicate()
+        await ffmpeg_proc.stdin.wait_closed()
+        
+        _, stderr = await ffmpeg_proc.communicate()
 
         if ffmpeg_proc.returncode != 0:
             raise RuntimeError(f"FFmpeg failed:\n{stderr.decode()}")
