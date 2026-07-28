@@ -18,6 +18,107 @@ if hasattr(sys, '_MEIPASS'):
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 
+async def extract_html_audio(browser, html_source, duration):
+    audio_injector = """
+    <script>
+    (function() {
+        window.__audioStream = null;
+        window.__audioChunks = [];
+        
+        const _AudioContext = window.AudioContext || window.webkitAudioContext;
+        if(!_AudioContext) return;
+        
+        window.AudioContext = class extends _AudioContext {
+            constructor(opts) {
+                super(opts);
+                if (!window.__sharedAudioContext) {
+                    window.__sharedAudioContext = this;
+                    this.__mediaStreamDestination = this.createMediaStreamDestination();
+                    window.__audioStream = this.__mediaStreamDestination.stream;
+                    
+                    try {
+                        window.__mediaRecorder = new MediaRecorder(window.__audioStream);
+                        window.__mediaRecorder.ondataavailable = e => {
+                            if (e.data.size > 0) window.__audioChunks.push(e.data);
+                        };
+                        window.__mediaRecorder.start();
+                    } catch(e) {
+                        console.error(e);
+                    }
+                } else {
+                    this.__mediaStreamDestination = window.__sharedAudioContext.__mediaStreamDestination;
+                }
+            }
+        };
+
+        const _connect = AudioNode.prototype.connect;
+        AudioNode.prototype.connect = function() {
+            var destination = arguments[0];
+            if (destination && destination.toString() === "[object AudioDestinationNode]") {
+                if (this.context && this.context.__mediaStreamDestination) {
+                    _connect.call(this, this.context.__mediaStreamDestination);
+                }
+            }
+            return _connect.apply(this, arguments);
+        };
+
+        const _play = HTMLMediaElement.prototype.play;
+        HTMLMediaElement.prototype.play = function() {
+            if (!this.__routed) {
+                this.__routed = true;
+                try {
+                    const ctx = window.__sharedAudioContext || new window.AudioContext();
+                    const source = ctx.createMediaElementSource(this);
+                    source.connect(ctx.destination);
+                } catch(e) {}
+            }
+            return _play.apply(this, arguments);
+        };
+
+        window.__stopAndGetAudio = async function() {
+            return new Promise(resolve => {
+                if (!window.__mediaRecorder || window.__mediaRecorder.state === "inactive") {
+                    resolve(""); return;
+                }
+                window.__mediaRecorder.onstop = async () => {
+                    const blob = new Blob(window.__audioChunks, { type: "audio/webm" });
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        let base64data = reader.result;
+                        resolve(base64data.split(',')[1]);
+                    };
+                    reader.readAsDataURL(blob);
+                };
+                window.__mediaRecorder.stop();
+            });
+        };
+    })();
+    </script>
+    """
+    
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8") as tmp:
+        head_lower = html_source.lower()
+        if "<head>" in head_lower:
+            idx = head_lower.index("<head>") + len("<head>")
+            tmp.write(html_source[:idx] + audio_injector + html_source[idx:])
+        else:
+            tmp.write(audio_injector + html_source)
+        tmp_path = tmp.name
+
+    page = await browser.new_page()
+    try:
+        await page.goto(f"file:///{tmp_path.replace(os.sep, '/')}", wait_until="domcontentloaded")
+        await asyncio.sleep(duration + 0.5)
+        base64_audio = await page.evaluate("window.__stopAndGetAudio()")
+    except Exception as e:
+        print(f"[⚠️] Audio extraction error: {e}")
+        base64_audio = ""
+    
+    await page.close()
+    os.unlink(tmp_path)
+    return base64_audio
+
+
 
 async def render_html_to_mp4(
     html_source: str,
@@ -27,6 +128,7 @@ async def render_html_to_mp4(
     width: int = 1920,
     height: int = 1080,
     bg_color: str = "#000000",
+    audio_path: str = None,
 ) -> str:
     from playwright.async_api import async_playwright
 
@@ -143,6 +245,7 @@ async def render_html_to_mp4(
         "--disable-features=IsolateOrigins,site-per-process",
         "--enable-accelerated-2d-canvas",
         "--hide-scrollbars",
+        "--autoplay-policy=no-user-gesture-required",
     ]
     if not is_windows:
         # EGL/GPU accel — Linux only
@@ -189,22 +292,45 @@ async def render_html_to_mp4(
             # Force-set ready and continue rather than hard crash
             await page.evaluate("window.__nexusReady = true; window.__nexusSeek(0);")
 
+        audio_task = None
+        if not audio_path:
+            print(f"[⚙️] Starting concurrent audio extraction pass...")
+            audio_task = asyncio.create_task(extract_html_audio(browser, html_source, duration))
+
         print(f"[✅] Animation initialized. Starting frame capture...")
 
         ffmpeg_cmd = [
             "ffmpeg", "-y",
             "-f", "image2pipe",
-            "-vcodec", "png",
+            "-vcodec", "mjpeg",
             "-framerate", str(fps),
-            "-i", "pipe:0",
+            "-thread_queue_size", "512",
+            "-i", "pipe:0"
+        ]
+        
+        if audio_path and os.path.exists(audio_path):
+            ffmpeg_cmd.extend(["-i", audio_path])
+            
+        ffmpeg_cmd.extend([
             "-c:v", "h264_nvenc",
             "-preset", "p4",
             "-cq", "18",
-            "-pix_fmt", "yuv420p",
+            "-pix_fmt", "yuv420p"
+        ])
+        
+        if audio_path and os.path.exists(audio_path):
+            ffmpeg_cmd.extend([
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-shortest"
+            ])
+            
+        ffmpeg_cmd.extend([
             "-movflags", "+faststart",
             "-vf", f"scale={width}:{height}:flags=lanczos",
             output_path,
         ]
+        )
 
         print(f"[⚙️] Opening FFmpeg pipe → {os.path.basename(output_path)}")
         ffmpeg_proc = subprocess.Popen(
@@ -223,12 +349,13 @@ async def render_html_to_mp4(
             await page.evaluate(f"window.__nexusSeek({time_ms:.4f})")
 
             try:
-                png_bytes = await page.screenshot(
-                    type="png",
+                jpeg_bytes = await page.screenshot(
+                    type="jpeg",
+                    quality=100,
                     clip={"x": 0, "y": 0, "width": width, "height": height},
                     animations="disabled",
                 )
-                ffmpeg_proc.stdin.write(png_bytes)
+                ffmpeg_proc.stdin.write(jpeg_bytes)
             except Exception as e:
                 errors += 1
                 print(f"[⚠️] Frame {frame_idx} screenshot failed: {e}")
@@ -247,6 +374,33 @@ async def render_html_to_mp4(
 
         if ffmpeg_proc.returncode != 0:
             raise RuntimeError(f"FFmpeg failed:\n{stderr.decode()}")
+            
+        if audio_task:
+            print(f"[⚙️] Finalizing audio extraction...")
+            base64_audio = await audio_task
+            if base64_audio:
+                print(f"[⚙️] Audio captured. Muxing with video...")
+                import base64
+                audio_bytes = base64.b64decode(base64_audio)
+                with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as a_tmp:
+                    a_tmp.write(audio_bytes)
+                    a_tmp_path = a_tmp.name
+                
+                final_tmp = output_path + ".tmp.mp4"
+                mux_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", output_path,
+                    "-i", a_tmp_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest",
+                    final_tmp
+                ]
+                subprocess.run(mux_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                os.replace(final_tmp, output_path)
+                os.unlink(a_tmp_path)
+            else:
+                print(f"[⚙️] No audio detected in HTML.")
 
         await browser.close()
 
@@ -271,6 +425,7 @@ def main():
     width       = int(options.get("width", 1920))
     height      = int(options.get("height", 1080))
     bg_color    = options.get("bgColor", "#000000")
+    audio_path  = options.get("audioPath", None)
 
     if not html_source:
         print("[❌] No HTML provided.")
@@ -284,6 +439,7 @@ def main():
         width=width,
         height=height,
         bg_color=bg_color,
+        audio_path=audio_path,
     ))
 
 

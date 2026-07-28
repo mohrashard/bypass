@@ -17,10 +17,13 @@ function isNoisyLine(line: string): boolean {
 
 const OPTIONS_META: Record<string, string> = {
   extractMp3: '🎵 Extract MP3 Audio',
+  mergeEngine: '🔄 Audio Merger Engine',
   removeSilence: '✂️ Remove Dead Air',
+  stabilizerEngine: '⚖️ Video Stabilizer Engine', // 👈 NEW: Stabilizer Engine
+  hookEngine: '🎣 0-Second Hook Engine',
   burnCaptions: '📝 Burn Viral Captions',
   studioAudio: '🎙️ Studio Audio Enhancer',
-  maskEngine: '🎭 Video Masking Engine', // <-- Add this line
+  maskEngine: '🎭 Video Masking Engine',
   blurBackground: '🌫️ AI Background FX',
   autoZoom: '🧠 Semantic Smart-Zooms',
   makeVertical: '📱 Face-Tracking Vertical',
@@ -44,16 +47,37 @@ export default function App() {
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   const [options, setOptions] = useState({
+    hookEngine: false,
+    hookPrimaryText: '',
+    hookSecondaryText: '',
+    hookPrimaryStyle: 's-electric-teal',
+    hookSecondaryStyle: 's-crimson-red',
+    hookBgColor: 'transparent',
+    hookYPercent: 40,
+    hookSizePercent: 100,
+    hookDuration: 1.5,
     startingHook: 'none',
     cinematicGrade: 'none',
     extractMp3: false,
-    maskEngine: false,
-    enable3dDepth: false, // 👈 NEW
+    mergeEngine: false,
+    mergeAudioPath: '',
+    mergeAudioName: '',
+    
+    // ── NEW: Stabilizer State ──
+    stabilizerEngine: false,
+    stabilizerBackend: 'cpu',      // 'cpu' | 'gpu'
+    stabilizerMode: 'camera_shake', // 'camera_shake' | 'action_cam' | 'smooth_tripod'
+    stabilizerSmoothing: 10,       // 1 - 30
+    stabilizerCrop: 5,             // 0% - 15% crop limit
+    stabilizerZoom: true,          // Auto-scale to remove black edges
 
-    // NEW: Mask State with Scale
+    maskEngine: false,
+    enable3dDepth: false,
+
+    // Mask State
     maskRatio: '4:5',
     maskBorderRadius: 18,
-    maskScale: 85, // 👈 NEW: Default to 85%
+    maskScale: 85,
     maskBgMode: 'image',
     maskBgColor: '#09090b',
     maskBgImagePath: '',
@@ -78,7 +102,6 @@ export default function App() {
     captionSecondaryStyle: 's-dark-blue-glow',
     captionMixedStyle: false,
 
-    // ── NEW: Sinhala Template Defaults ──
     siMainStyle: 'si-main-blue',
     siPrimaryStyle: 'si-pri-silver',
     siSecondaryStyle: 'si-sec-gold',
@@ -159,12 +182,11 @@ export default function App() {
     }
   };
 
-  // Automatically update the live preview when sliders are moved (with debounce)
   useEffect(() => {
     if (!previewSrc || isPreviewLoading) return;
     const timer = setTimeout(() => {
       handleLivePreview();
-    }, 400); // 400ms debounce so we don't overwhelm FFmpeg while dragging
+    }, 400);
     return () => clearTimeout(timer);
   }, [options.bgScale, options.subjectScale, options.subjectY, options.bgImagePath, options.bgMode]);
 
@@ -178,6 +200,20 @@ export default function App() {
         ...prev,
         bgImagePath: selected,
         bgImageName: selected.split(/[\\/]/).pop() ?? 'image.jpg',
+      }));
+    }
+  };
+
+  const handleSelectMergeAudio = async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'flac', 'aac'] }],
+    }).catch(() => null);
+    if (selected && typeof selected === 'string') {
+      setOptions((prev) => ({
+        ...prev,
+        mergeAudioPath: selected,
+        mergeAudioName: selected.split(/[\\/]/).pop() ?? 'audio.mp3',
       }));
     }
   };
@@ -204,6 +240,37 @@ export default function App() {
     });
   };
 
+  const handleGeneratePrompt = async () => {
+    if (!selectedFilePath || isProcessing) return;
+    setIsProcessing(true);
+    setTerminalLines(['Extracting Audio and Running Whisper (this may take 10-20s)...']);
+    try {
+      const output = await invoke<string>('run_python_engine', {
+        videoPath: selectedFilePath,
+        processType: 'pipeline',
+        optionsJson: JSON.stringify({ ...options, generatePromptOnly: true }),
+      });
+      
+      const startTag = '[PROMPT_START]';
+      const endTag = '[PROMPT_END]';
+      const startIndex = output.indexOf(startTag);
+      const endIndex = output.indexOf(endTag);
+      
+      if (startIndex !== -1 && endIndex !== -1) {
+        const promptText = output.substring(startIndex + startTag.length, endIndex).trim();
+        await navigator.clipboard.writeText(promptText);
+        setTerminalLines((prev) => [...prev, '', `✅ AI Prompt with exact duration and Whisper timestamps copied to clipboard!`]);
+        alert('AI Prompt copied to clipboard! You can now paste it into ChatGPT/Claude.');
+      } else {
+        setTerminalLines((prev) => [...prev, '', `❌ Failed to extract prompt from engine output.`]);
+      }
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleRunPipeline = async () => {
     if (!selectedFilePath || isProcessing) return;
     setIsProcessing(true);
@@ -215,10 +282,11 @@ export default function App() {
         optionsJson: JSON.stringify(options),
       });
     } catch (error) {
-      if (String(error).includes("terminated")) {
+      const errorStr = String(error);
+      if (errorStr.includes("terminated") || errorStr.includes("exited with code")) {
         setTerminalLines((prev) => [...prev, '', `🛑 RENDER CANCELLED BY USER.`]);
       } else {
-        setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
+        setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${errorStr}`]);
       }
     } finally {
       setIsProcessing(false);
@@ -308,6 +376,91 @@ export default function App() {
                       )}
                     </div>
 
+                    {/* ── AUDIO MERGER ENGINE UI ── */}
+                    {key === 'mergeEngine' && options.mergeEngine && (
+                      <div className="flex flex-col gap-3 p-3 ml-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
+                        <div className="text-xs text-zinc-500 italic pb-2 border-b border-zinc-800/50">
+                          Replaces the original video audio with the enhanced audio file and boosts volume slightly.
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <button
+                            onClick={(e) => { e.preventDefault(); handleSelectMergeAudio(); }}
+                            className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300 transition-colors border border-zinc-600 shadow-sm active:scale-95 whitespace-nowrap"
+                          >
+                            {options.mergeAudioName ? 'Change Audio' : 'Select Audio'}
+                          </button>
+                          <span className="text-[11px] text-sky-400 font-mono truncate max-w-[150px] ml-3" title={options.mergeAudioPath}>
+                            {options.mergeAudioName || 'No file selected'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── NEW: STABILIZER ENGINE UI CONTROLS ── */}
+                    {key === 'stabilizerEngine' && options.stabilizerEngine && (
+                      <div className="flex flex-col gap-3 p-3 ml-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
+                        <div className="flex items-center justify-between pb-2 border-b border-zinc-800/50">
+                          <span className="text-xs text-sky-400 font-semibold uppercase tracking-wider">Motion Stabilization</span>
+                          <span className="text-[10px] text-zinc-500 font-mono">2-Pass Track</span>
+                        </div>
+                        
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-zinc-400 font-medium">Engine Backend</span>
+                          <select 
+                            value={options.stabilizerBackend || 'cpu'} 
+                            onChange={(e) => setOptions((prev) => ({ ...prev, stabilizerBackend: e.target.value }))}
+                            className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-[10px] rounded p-1 outline-none focus:border-sky-500 font-medium">
+                            <option value="cpu">🐢 MediaPipe (CPU - Legacy)</option>
+                            <option value="gpu">🚀 PyTorch (GPU - Fast)</option>
+                          </select>
+                        </div>
+
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-zinc-400 font-medium">Mode</span>
+                          <select 
+                            value={options.stabilizerMode} 
+                            onChange={(e) => setOptions((prev) => ({ ...prev, stabilizerMode: e.target.value }))}
+                            className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-[10px] rounded p-1 outline-none focus:border-sky-500 font-medium">
+                            <option value="camera_shake">📱 Handheld Fix</option>
+                            <option value="action_cam">🏃 Action Cam</option>
+                            <option value="smooth_tripod">🎬 Cinematic Glide</option>
+                          </select>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs text-zinc-400 font-medium min-w-[70px]">Smoothing</span>
+                          <input
+                            type="range" min="1" max="30"
+                            value={options.stabilizerSmoothing}
+                            onChange={(e) => setOptions((prev) => ({ ...prev, stabilizerSmoothing: parseInt(e.target.value) }))}
+                            className="flex-1 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                          />
+                          <span className="text-xs text-zinc-500 font-mono w-6 text-right">{options.stabilizerSmoothing}</span>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs text-zinc-400 font-medium min-w-[70px]">Max Crop</span>
+                          <input
+                            type="range" min="0" max="15"
+                            value={options.stabilizerCrop}
+                            onChange={(e) => setOptions((prev) => ({ ...prev, stabilizerCrop: parseInt(e.target.value) }))}
+                            className="flex-1 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                          />
+                          <span className="text-xs text-zinc-500 font-mono w-6 text-right">{options.stabilizerCrop}%</span>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
+                          <span className="text-xs text-zinc-400 font-medium">Auto-Zoom Compensation</span>
+                          <input 
+                            type="checkbox" 
+                            checked={options.stabilizerZoom} 
+                            onChange={(e) => setOptions((prev) => ({ ...prev, stabilizerZoom: e.target.checked }))} 
+                            className="w-4 h-4 accent-sky-500 cursor-pointer"
+                          />
+                        </div>
+                      </div>
+                    )}
+
                     {key === 'autoZoom' && options.autoZoom && (
                       <div className="flex flex-col gap-3 p-3 ml-2 rounded-lg bg-zinc-900/80 border border-zinc-800">
                         <div className="text-xs text-zinc-500 italic pb-2 border-b border-zinc-800/50">
@@ -391,7 +544,6 @@ export default function App() {
                               </button>
                             </div>
                             
-                            {/* NEW: Compositing Controls */}
                             <div className="flex flex-col gap-2 pt-2 border-t border-zinc-800/50 mt-1">
                               <div className="flex items-center gap-3">
                                 <span className="text-[10px] text-zinc-500 font-medium tracking-wider min-w-[70px]">BG ZOOM</span>
@@ -485,11 +637,7 @@ export default function App() {
                                   1. Copy the prompt. 2. Upload your audio to Gemini Web. 3. Paste prompt. 4. Paste the resulting JSON array here.
                                 </p>
                                 <button
-                                  onClick={async () => {
-                                    const prompt = `Listen to this audio. It is a mix of Sinhala and English (Singlish).\nWrite down EXACTLY what is said, verbatim.\n\nCRITICAL RULES: \n1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.\n2. Break the text into short, logical phrases of exactly 3 to 5 words each.\n3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission" , "Grab Me"). \n4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").\n5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්" , "වැඩ").\n6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.\n7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.\n8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:\n   - THE HOOK: The very first attention-grabbing statement or question.\n   - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").\n   - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.\n   DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.\n\nYou must provide the approximate start and end times for each phrase in seconds.\nOutput strictly as a JSON array. Example:\n[\n  {"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2},\n  {"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2},\n  {"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}\n]\nDo not include any markdown formatting. Just the raw JSON array.`;
-                                    await navigator.clipboard.writeText(prompt);
-                                    alert("Prompt copied to clipboard!");
-                                  }}
+                                  onClick={handleGeneratePrompt}
                                   className="w-full bg-orange-600/20 text-orange-400 border border-orange-500/50 hover:bg-orange-500 hover:text-white transition-colors rounded py-1.5 text-xs font-semibold uppercase tracking-wider"
                                 >
                                   Copy Prompt
@@ -505,7 +653,6 @@ export default function App() {
                           </div>
                         )}
 
-                        {/* ── ENGLISH TEMPLATES ── */}
                         {(options.captionLanguage === 'en' || options.captionLanguage === 'manual_srt') && (
                           <>
                             <div className="flex items-center justify-between">
@@ -531,7 +678,6 @@ export default function App() {
                                 <option value="p-heavy-stroke">3. Heavy Stroke Black</option>
                                 <option value="p-soft-yellow">4. Soft Pastel Yellow</option>
                                 <option value="p-neon-base">5. Neon Ambient White</option>
-                                {/* ADD THIS NEW LINE */}
                                 <option value="p-silver-translucent">6. Silver Translucent Glow</option>
                                 <option value="p-sunset-glow">7. Sunset Warm Glow</option>
                               </select>
@@ -546,7 +692,6 @@ export default function App() {
                                 <option value="s-crimson-red">3. Aggressive Crimson</option>
                                 <option value="s-cyber-purple">4. Cyberpunk Purple</option>
                                 <option value="s-luxury-gold">5. Luxury Metallic Gold</option>
-                                {/* ADD THIS NEW LINE */}
                                 <option value="s-dark-blue-glow">6. Dark Blue Glow</option>
                                 <option value="s-matrix-green">7. Matrix Hacker Green</option>
                                 <option value="none">Disable Highlights</option>
@@ -568,7 +713,6 @@ export default function App() {
                           </>
                         )}
 
-                        {/* ── SINHALA TEMPLATES ── */}
                         {options.captionLanguage === 'si' && (
                           <>
                             <div className="flex items-center justify-between">
@@ -626,7 +770,6 @@ export default function App() {
                           </select>
                         </div>
 
-                        {/* ── NEW: CAPTION POSITION PREVIEW ── */}
                         <div className="border-t border-zinc-800/50 pt-3 mt-2 mb-2 flex flex-col gap-2">
 
                           <div className="flex items-center justify-between mb-1">
@@ -657,7 +800,6 @@ export default function App() {
                             <span className="text-xs text-zinc-400 font-mono">{options.captionBottomPercent}% from bottom</span>
                           </div>
 
-                          {/* ── UPDATED: Dynamic Container that morphs shape ── */}
                           <div className={`relative bg-black rounded-lg overflow-hidden border border-zinc-700 group pointer-events-none mx-auto transition-all duration-300 ease-in-out ${isPreviewVertical ? 'w-48 h-[340px]' : 'w-full h-44'
                             }`}>
                             {selectedFilePath ? (
@@ -679,28 +821,18 @@ export default function App() {
                               </div>
                             )}
 
-                            {/* ── TIKTOK SAFE ZONE OVERLAY ── */}
                             {isPreviewVertical && showSafeZone && (
                               <div className="absolute inset-0 pointer-events-none z-10 flex flex-col justify-between">
-                                {/* Top Overlay */}
                                 <div className="w-full bg-red-500/20 flex items-center justify-center text-[8px] font-bold text-white/50" style={{ height: '8%' }}>TOP ZONE</div>
-                                {/* Middle Section */}
                                 <div className="flex-1 flex justify-between">
-                                  {/* Left Overlay */}
                                   <div className="bg-red-500/20" style={{ width: '5%' }}></div>
-
-                                  {/* Right Overlay */}
                                   <div className="bg-red-500/20 flex items-center justify-center text-[8px] font-bold text-white/50" style={{ width: '12%' }}>UI</div>
                                 </div>
-                                {/* Bottom Overlay */}
                                 <div className="w-full bg-red-500/20 flex items-center justify-center text-[8px] font-bold text-white/50" style={{ height: '22%' }}>BOTTOM ZONE</div>
-
-                                {/* Inner Safe Area Border */}
                                 <div className="absolute top-[8%] bottom-[22%] left-[5%] right-[12%] border border-dashed border-green-500/60 rounded"></div>
                               </div>
                             )}
 
-                            {/* The Floating Preview Tag */}
                             <div
                               className="absolute left-0 right-0 flex justify-center w-full transition-all duration-75 ease-out"
                               style={{ bottom: `${options.captionBottomPercent}%` }}
@@ -759,23 +891,21 @@ export default function App() {
                           <span className="text-xs text-sky-400 font-semibold uppercase tracking-wider">Mask Preview</span>
                         </div>
 
-                        {/* DYNAMIC CSS PREVIEW CANVAS */}
                         <div
                           className="relative rounded-lg overflow-hidden border border-zinc-700 mx-auto w-full max-w-[220px] flex items-center justify-center transition-all duration-300 shadow-inner"
                           style={{
-                            aspectRatio: '9/16', // Standard vertical canvas representation
+                            aspectRatio: '9/16',
                             backgroundColor: options.maskBgMode === 'color' ? options.maskBgColor : '#000',
                             backgroundImage: options.maskBgMode === 'image' && options.maskBgImagePath ? `url(${convertFileSrc(options.maskBgImagePath)})` : 'none',
                             backgroundSize: 'cover',
                             backgroundPosition: 'center'
                           }}
                         >
-                          {/* INNER MASKED VIDEO (With Dynamic Scale & Border Radius) */}
                           <div
                             className="relative overflow-hidden shadow-[0_0_25px_rgba(0,0,0,0.6)] transition-all duration-300 flex items-center justify-center bg-zinc-800"
                             style={{
                               aspectRatio: options.maskRatio.replace(':', '/'),
-                              height: `${options.maskScale}%`, // 👈 UPDATED
+                              height: `${options.maskScale}%`,
                               borderRadius: `${options.maskBorderRadius}px`
                             }}
                           >
@@ -792,7 +922,6 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* TOOL CONTROLS */}
                         <div className="flex items-center justify-between mt-3">
                           <span className="text-xs text-zinc-400 font-medium">Aspect Ratio</span>
                           <select value={options.maskRatio}
@@ -806,7 +935,6 @@ export default function App() {
                           </select>
                         </div>
 
-                        {/* Mask Size Slider */}
                         <div className="flex items-center gap-3 mt-3">
                           <span className="text-xs text-zinc-400 font-medium min-w-[80px]">Mask Size</span>
                           <input
@@ -818,7 +946,6 @@ export default function App() {
                           <span className="text-xs text-zinc-500 font-mono w-8 text-right">{options.maskScale}%</span>
                         </div>
 
-                        {/* Border Radius Slider */}
                         <div className="flex items-center gap-3">
                           <span className="text-xs text-zinc-400 font-medium min-w-[80px]">Corner Radius</span>
                           <input
@@ -873,15 +1000,23 @@ export default function App() {
                             <option value="cyber-warm">🟧 Hollywood Teal & Orange</option>
                             <option value="poth-rakke">🌴 Poth Rakke (Tropical Yellow)</option>
                             <option value="studio-blue">🔵 Studio Blue Backdrop (Skin-Safe)</option>
+                            {/* ── NEW: M22 Rescue Engine ── */}
+                            <option value="m22-to-iphone-4k">✨ M22 4K Rescue (Denoise & Upscale)</option>
                           </select>
                         </div>
+
+                        {options.colorGradeStyle === 'm22-to-iphone-4k' && (
+                          <div className="mt-1 p-2 bg-emerald-950/30 border border-emerald-900/50 rounded flex flex-col gap-1">
+                            <span className="text-[10px] text-emerald-400 font-semibold uppercase tracking-wider">Active: Spatial Denoise + Lanczos 4K</span>
+                            <span className="text-[10px] text-zinc-400 leading-tight">Removes low-light sensor grain and digitally upscales to 3840x2160 for high-bitrate social media uploads.</span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
                 ))}
               </div>
 
-              {/* ── CINEMATIC GRADE ENGINE ── */}
               <div className="flex flex-col gap-3 p-3 rounded-lg bg-zinc-900/80 border border-zinc-800 mt-3">
                 <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/50">
                   <span className="text-xs text-sky-400 font-semibold uppercase tracking-wider">Cinematic Grade Engine</span>
@@ -899,14 +1034,208 @@ export default function App() {
                     <option value="cinematic_cold">❄️ Cinematic Cold</option>
                     <option value="warm_podcast">🎙️ Warm Podcast</option>
                     <option value="blurred_bg">🌫️ Blurred BG</option>
+                    <option value="m22-to-iphone-4k">📱 M22→iPhone 4K</option>
+                    <option value="neon-blue">🔵 Neon Blue Studio</option>
+                    <option value="cyber-warm">🍊 Teal & Orange</option>
+                    <option value="poth-rakke">🌴 Poth Rakke</option>
+                    <option value="studio-blue">🎬 Studio Blue</option>
                   </select>
                 </div>
               </div>
 
-              {/* ── STARTING VISUAL HOOK ENGINE ── */}
-              <div className="flex flex-col gap-3 p-3 rounded-lg bg-zinc-900/80 border border-zinc-800 mt-3">
-                <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/50">
-                  <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">0-Second Hook Engine</span>
+              {options.hookEngine && (
+                <div className="flex flex-col gap-3 p-3 rounded-lg bg-zinc-900/80 border border-zinc-800 mt-3">
+                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-zinc-800/50">
+                    <span className="text-xs text-orange-400 font-semibold uppercase tracking-wider">0-Second Hook Engine</span>
+                  </div>
+
+                <div className="flex flex-col gap-2 border-b border-zinc-800/50 pb-3 mb-1">
+                  
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-zinc-400 font-medium">Primary Line</span>
+                    <select
+                      value={options.hookPrimaryStyle}
+                      onChange={(e) => setOptions((prev) => ({ ...prev, hookPrimaryStyle: e.target.value }))}
+                      className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-[10px] rounded p-1 outline-none focus:border-orange-500 font-medium max-w-[140px]"
+                    >
+                      <option value="s-electric-teal">🌊 Electric Teal (Cyan)</option>
+                      <option value="s-crimson-red">🔴 Crimson Red (Red)</option>
+                      <option value="s-hormozi-yellow">🟡 Hormozi Yellow (Yellow)</option>
+                      <option value="p-clean-white">⚪ Clean White (White)</option>
+                      <option value="p-neon-base">🔵 Neon Base (Cyan/White)</option>
+                      <option value="p-glass-silver">🪞 Glass Silver (Silver)</option>
+                      <option value="p-heavy-stroke">⬛ Heavy Stroke (White/Black)</option>
+                    </select>
+                  </div>
+                  <input 
+                    type="text" 
+                    placeholder="E.g. GET 3X" 
+                    value={options.hookPrimaryText}
+                    onChange={(e) => setOptions((prev) => ({ ...prev, hookPrimaryText: e.target.value }))}
+                    className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1.5 outline-none focus:border-orange-500 w-full font-medium"
+                  />
+
+                  <div className="flex items-center justify-between mt-1 mb-1">
+                    <span className="text-xs text-zinc-400 font-medium">Secondary Line</span>
+                    <select
+                      value={options.hookSecondaryStyle}
+                      onChange={(e) => setOptions((prev) => ({ ...prev, hookSecondaryStyle: e.target.value }))}
+                      className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-[10px] rounded p-1 outline-none focus:border-orange-500 font-medium max-w-[140px]"
+                    >
+                      <option value="s-crimson-red">🔴 Crimson Red (Red)</option>
+                      <option value="s-electric-teal">🌊 Electric Teal (Cyan)</option>
+                      <option value="s-hormozi-yellow">🟡 Hormozi Yellow (Yellow)</option>
+                      <option value="p-clean-white">⚪ Clean White (White)</option>
+                      <option value="p-neon-base">🔵 Neon Base (Cyan/White)</option>
+                      <option value="p-glass-silver">🪞 Glass Silver (Silver)</option>
+                      <option value="p-heavy-stroke">⬛ Heavy Stroke (White/Black)</option>
+                    </select>
+                  </div>
+                  <input 
+                    type="text" 
+                    placeholder="E.g. FOLLOWERS" 
+                    value={options.hookSecondaryText}
+                    onChange={(e) => setOptions((prev) => ({ ...prev, hookSecondaryText: e.target.value }))}
+                    className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1.5 outline-none focus:border-orange-500 w-full font-medium"
+                  />
+
+                  <div className="flex items-center justify-between mt-2 mb-1">
+                    <span className="text-xs text-zinc-400 font-medium">Glass Background</span>
+                    <select
+                      value={options.hookBgColor}
+                      onChange={(e) => setOptions((prev) => ({ ...prev, hookBgColor: e.target.value }))}
+                      className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-[10px] rounded p-1 outline-none focus:border-orange-500 font-medium max-w-[140px]"
+                    >
+                      <option value="transparent">❌ None (Transparent)</option>
+                      <option value="rgba(255, 255, 255, 0.15)">⚪ Frosted White</option>
+                      <option value="rgba(0, 0, 0, 0.4)">⬛ Dark Glass</option>
+                      <option value="rgba(0, 100, 255, 0.25)">🔵 Blue Glass</option>
+                      <option value="dark-blue-glow">🌌 Dark Blue Glow</option>
+                      <option value="silver-glow">✨ Silver Glow</option>
+                      <option value="rgba(0, 255, 255, 0.15)">🌊 Cyan Tint</option>
+                      <option value="rgba(255, 0, 0, 0.15)">🔴 Red Tint</option>
+                    </select>
+                  </div>
+
+                  {(options.hookPrimaryText || options.hookSecondaryText) && (
+                    <div className="flex items-center gap-3 mt-2">
+                      <span className="text-[10px] text-zinc-500 font-medium tracking-wider min-w-[70px]">DURATION</span>
+                      <input type="range" min="0.5" max="3" step="0.1" value={options.hookDuration} onChange={(e) => setOptions((prev) => ({ ...prev, hookDuration: parseFloat(e.target.value) }))} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-orange-500" />
+                      <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{options.hookDuration}s</span>
+                    </div>
+                  )}
+
+                  <div className="border-t border-zinc-800/50 pt-3 mt-2 flex flex-col gap-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-sky-400 font-semibold uppercase tracking-wider">Position Preview</span>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setIsPreviewVertical(!isPreviewVertical);
+                          }}
+                          className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-300 transition-colors border border-zinc-600 flex items-center gap-1.5 shadow-sm active:scale-95"
+                        >
+                          {isPreviewVertical ? '📱 9:16 View' : '🖥️ 16:9 View'}
+                        </button>
+
+                        {isPreviewVertical && (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setShowSafeZone(!showSafeZone);
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] transition-colors border flex items-center gap-1.5 shadow-sm active:scale-95 ${showSafeZone ? 'bg-fuchsia-600 border-fuchsia-500 text-white' : 'bg-zinc-800 border-zinc-600 text-zinc-300 hover:bg-zinc-700'}`}
+                          >
+                            🛡️ Safe Zone
+                          </button>
+                        )}
+                      </div>
+                      <span className="text-xs text-zinc-400 font-mono">{options.hookYPercent}% from top</span>
+                    </div>
+
+                    <div className={`relative bg-black rounded-lg overflow-hidden border border-zinc-700 group pointer-events-none mx-auto transition-all duration-300 ease-in-out ${isPreviewVertical ? 'w-48 h-[340px]' : 'w-full h-44'}`}>
+                      {selectedFilePath ? (
+                        <video src={convertFileSrc(selectedFilePath)} className="w-full h-full object-cover opacity-60" preload="auto" muted playsInline onLoadedMetadata={(e) => e.currentTarget.currentTime = 0.0} />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-zinc-600 space-y-2">
+                          <span className="text-2xl">🖼️</span>
+                          <span className="text-[10px] uppercase tracking-wider font-semibold">Awaiting Video</span>
+                        </div>
+                      )}
+                      
+                      {isPreviewVertical && showSafeZone && (
+                        <div className="absolute inset-0 pointer-events-none z-10 flex flex-col justify-between">
+                          <div className="w-full bg-red-500/20 flex items-center justify-center text-[8px] font-bold text-white/50" style={{ height: '8%' }}>TOP ZONE</div>
+                          <div className="flex-1 flex justify-between">
+                            <div className="bg-red-500/20" style={{ width: '5%' }}></div>
+                            <div className="bg-red-500/20 flex items-center justify-center text-[8px] font-bold text-white/50" style={{ width: '12%' }}>UI</div>
+                          </div>
+                          <div className="w-full bg-red-500/20 flex items-center justify-center text-[8px] font-bold text-white/50" style={{ height: '22%' }}>BOTTOM ZONE</div>
+                        </div>
+                      )}
+
+                      <div className="absolute left-0 right-0 flex flex-col items-center justify-center w-full transition-all duration-75 ease-out" style={{ top: `${options.hookYPercent}%`, transform: `translateY(-50%) scale(${options.hookSizePercent / 100})`, transformOrigin: 'center center' }}>
+                        <div style={{
+                          background: options.hookBgColor === 'dark-blue-glow' ? 'rgba(0, 20, 60, 0.6)' : 
+                                      options.hookBgColor === 'silver-glow' ? 'rgba(255, 255, 255, 0.1)' : 
+                                      options.hookBgColor !== 'transparent' ? options.hookBgColor : 'transparent',
+                          border: options.hookBgColor === 'dark-blue-glow' ? '2px solid rgba(0, 150, 255, 0.4)' : 
+                                  options.hookBgColor === 'silver-glow' ? '2px solid rgba(255, 255, 255, 0.6)' : 
+                                  options.hookBgColor !== 'transparent' ? '2px solid rgba(255, 255, 255, 0.15)' : 'none',
+                          borderRadius: options.hookBgColor !== 'transparent' ? '16px' : '0',
+                          padding: options.hookBgColor !== 'transparent' ? '12px 20px' : '0',
+                          boxShadow: options.hookBgColor === 'dark-blue-glow' ? '0 0 30px rgba(0, 100, 255, 0.8), inset 0 1px 0 rgba(255,255,255,0.2)' : 
+                                     options.hookBgColor === 'silver-glow' ? '0 0 30px rgba(200, 220, 255, 0.7), inset 0 1px 0 rgba(255,255,255,0.5)' : 
+                                     options.hookBgColor !== 'transparent' ? '0 10px 30px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.2)' : 'none',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}>
+                          {options.hookPrimaryText && (
+                            <div className="bg-orange-500/80 backdrop-blur-md border border-orange-400 text-white px-3 py-1 rounded shadow-2xl font-bold text-[10px] uppercase tracking-widest leading-none mb-1">
+                              {options.hookPrimaryText}
+                            </div>
+                          )}
+                          {options.hookSecondaryText && (
+                            <div className="bg-white/90 backdrop-blur-md border border-zinc-200 text-black px-3 py-1 rounded shadow-2xl font-bold text-[10px] uppercase tracking-widest leading-none">
+                              {options.hookSecondaryText}
+                            </div>
+                          )}
+                          {(!options.hookPrimaryText && !options.hookSecondaryText) && (
+                            <div className="bg-zinc-900/80 backdrop-blur-md border border-zinc-600 text-white px-4 py-1.5 rounded-md shadow-2xl font-bold text-[11px] uppercase tracking-widest whitespace-nowrap">
+                              Hook Engine Preview
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2 mt-2">
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] text-zinc-500 font-medium tracking-wider w-10">TOP</span>
+                        <input
+                          type="range" min="5" max="95"
+                          value={options.hookYPercent}
+                          onChange={(e) => setOptions((prev) => ({ ...prev, hookYPercent: parseInt(e.target.value) }))}
+                          className="flex-1 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                        />
+                        <span className="text-[10px] text-zinc-500 font-medium tracking-wider w-10 text-right">BOTTOM</span>
+                      </div>
+                      
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] text-zinc-500 font-medium tracking-wider w-10">SMALL</span>
+                        <input
+                          type="range" min="50" max="180"
+                          value={options.hookSizePercent}
+                          onChange={(e) => setOptions((prev) => ({ ...prev, hookSizePercent: parseInt(e.target.value) }))}
+                          className="flex-1 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-fuchsia-500"
+                        />
+                        <span className="text-[10px] text-zinc-500 font-medium tracking-wider w-10 text-right">{options.hookSizePercent}%</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between">
@@ -923,6 +1252,7 @@ export default function App() {
                     <option value="flash">⚡ Studio Bloom Flash</option>
                     <option value="glitch">📺 Cyber Pixel-Sort</option>
                     <option value="impact">🎬 Push-In Impact</option>
+                    <option value="blur_zoom">🔍 Cinematic Blur-Zoom</option>
                   </select>
                 </div>
 
@@ -932,6 +1262,7 @@ export default function App() {
                   </p>
                 )}
               </div>
+              )}
             </div>
 
             {isProcessing ? (

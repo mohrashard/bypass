@@ -101,6 +101,7 @@ interface RenderOptions {
   width: number;
   height: number;
   bgColor: string;
+  audioPath?: string;
 }
 
 const PRESETS = [
@@ -128,6 +129,7 @@ export default function NexusTab() {
     width: 1920,
     height: 1080,
     bgColor: '#000000',
+    audioPath: '',
   });
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -396,6 +398,17 @@ export default function NexusTab() {
                   />
                   <span className="text-[10px] text-zinc-500 font-mono">{renderOptions.bgColor}</span>
                 </div>
+              </div>
+
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[9px] text-zinc-600 uppercase tracking-wider">Audio Path (Optional)</span>
+                <input
+                  type="text"
+                  placeholder="C:\path\to\audio.wav"
+                  value={renderOptions.audioPath || ''}
+                  onChange={e => setRenderOptions(p => ({ ...p, audioPath: e.target.value }))}
+                  className="w-48 bg-zinc-950 border border-zinc-800 text-zinc-300 text-[11px] rounded px-2 py-1 outline-none focus:border-purple-600 font-mono"
+                />
               </div>
 
               <div className="flex-1" />

@@ -277,6 +277,20 @@ def stage_cinematic_color(video_path: str, color_options: dict) -> str:
         print("      ↳ Mode: Studio Blue Backdrop (Skin-Safe)")
         # Cools the shadows/background while explicitly preserving/warming the midtones for skin-safe grading
         filter_chain = "colorbalance=rs=0.0:gs=0.0:bs=0.15:rm=0.05:bm=0.0:bh=0.05,eq=contrast=1.10:saturation=1.12:gamma=0.95,unsharp=5:5:0.8:3:3:0.0"
+    elif grade_style == "m22-to-iphone-4k":
+        print("      ↳ Mode: M22 Rescue (Denoise + Smart 4K Upscale + Smart HDR)")
+        # 1. hqdn3d: Kills the nasty budget-sensor grain.
+        # 2. scale: Dynamically checks if video is vertical or horizontal. 
+        #    - If horizontal (iw>ih): Sets width to 3840, auto-calculates height (-2 keeps it even).
+        #    - If vertical (ih>iw): Sets height to 3840, auto-calculates width.
+        # 3. eq: Lifts the shadows slightly and boosts contrast to mimic Apple's Smart HDR.
+        # 4. unsharp: Crisps up the edges after the upscale.
+        filter_chain = (
+            "hqdn3d=4.0:3.0:6.0:4.5,"
+            "eq=contrast=1.08:saturation=1.15:gamma=1.05,"
+            "unsharp=5:5:1.2:3:3:0.0,"
+            "scale='if(gt(iw,ih),3840,-2)':'if(gt(iw,ih),-2,3840)':flags=lanczos"
+        )
     else:
         print("      ↳ Mode: iPhone Pro Max (Smart HDR)")
         # Gamma > 1 lifts shadows (Smart HDR effect), preventing dark hair from crushing into the background
@@ -415,6 +429,12 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
                     "end":   w["end"]
                 })
 
+    hook_pri_text = cap_options.get("hookPrimaryText", "").strip()
+    hook_sec_text = cap_options.get("hookSecondaryText", "").strip()
+    if cap_options.get("hookEngine") and (hook_pri_text or hook_sec_text):
+        hook_dur = float(cap_options.get("hookDuration", 1.5))
+        word_events = [w for w in word_events if w["start"] >= hook_dur]
+
     # 🚀 UPGRADED: Much larger chunks (up to 6 words) to build multi-line blocks
     phrases = []
     current_phrase = []
@@ -518,11 +538,38 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
         page.set_content(make_base_html(W, H), wait_until="networkidle")
 
         rendered_done = set()
+        
+        # ── DYNAMIC SVG ICON LIBRARY ──
+        svg_map = {
+            "instagram": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>',
+            "youtube": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17"></path><path d="M10 15l5-3-5-3v6z"></path></svg>',
+            "tiktok": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"></path></svg>',
+            "money": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><rect x="2" y="6" width="20" height="12" rx="2"></rect><circle cx="12" cy="12" r="2"></circle><path d="M6 12h.01M18 12h.01"></path></svg>',
+            "fire": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path></svg>',
+            "ai": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"></path></svg>',
+            "law": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"></path><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"></path><path d="M7 21h10"></path><path d="M12 3v18"></path><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"></path></svg>',
+            "time": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
+            "code": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>',
+            "lightning": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>',
+            "document": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>',
+            "star": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>',
+            "heart": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>',
+            "camera": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>',
+            "music": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>',
+            "globe": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>',
+            "check": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+            "cross": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
+            "chart": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>',
+            "lightbulb": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1.3.5 2.6 1.5 3.5.8.8 1.3 1.5 1.5 2.5"></path><path d="M9 18h6"></path><path d="M10 22h4"></path></svg>',
+            "shield": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>',
+            "lock": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'
+        }
+        
         for t_s, t_e, png_path, phrase_words, active_idx, phrase_start in segments:
             key = (phrase_words, active_idx)
             if key in rendered_done: continue
-
-            # 🚀 UPGRADED: Smart Row Line-Breaking Logic in JavaScript
+            
+            # 🚀 UPGRADED: Smart Row Line-Breaking Logic with Background SVGs
             page.evaluate("""
                 (args) => {
                     const wrapEl = document.getElementById('wrap');
@@ -601,6 +648,94 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
                         wordsInRow++;
                         charsInRow += word.length;
                     });
+                    
+                    // 5. SVG Backdrop Injection (Dynamic Color & Animation)
+                    let foundIcon = null;
+                    let triggerIndex = -1;
+                    const aliases = {
+                        'instagram': 'instagram', 'ig': 'instagram', 'insta': 'instagram',
+                        'youtube': 'youtube', 'yt': 'youtube', 'channel': 'youtube',
+                        'tiktok': 'tiktok', 'tt': 'tiktok',
+                        'money': 'money', 'cash': 'money', 'dollars': 'money', 'profit': 'money', 'rich': 'money', 'paid': 'money',
+                        'fire': 'fire', 'burn': 'fire', 'hot': 'fire',
+                        'ai': 'ai', 'chatgpt': 'ai', 'artificial': 'ai', 'software': 'ai', 'robot': 'ai',
+                        'law': 'law', 'firm': 'law', 'lawyer': 'law', 'attorney': 'law', 'legal': 'law',
+                        'time': 'time', 'clock': 'time', 'days': 'time', 'months': 'time', 'weeks': 'time', 'hours': 'time',
+                        'code': 'code', 'app': 'code', 'api': 'code', 'developer': 'code',
+                        'lightning': 'lightning', 'speed': 'lightning', 'fast': 'lightning', 'quick': 'lightning',
+                        'document': 'document', 'blueprint': 'document', 'file': 'document', 'paper': 'document',
+                        
+                        'star': 'star', 'premium': 'star', 'best': 'star', 'top': 'star', 'quality': 'star',
+                        'heart': 'heart', 'love': 'heart', 'like': 'heart', 'favorite': 'heart',
+                        'camera': 'camera', 'video': 'camera', 'record': 'camera', 'film': 'camera', 'shot': 'camera', 'photo': 'camera',
+                        'music': 'music', 'audio': 'music', 'sound': 'music', 'song': 'music', 'beat': 'music', 'track': 'music',
+                        'globe': 'globe', 'world': 'globe', 'global': 'globe', 'online': 'globe', 'internet': 'globe', 'earth': 'globe',
+                        'check': 'check', 'yes': 'check', 'correct': 'check', 'right': 'check', 'true': 'check', 'done': 'check', 'complete': 'check',
+                        'cross': 'cross', 'no': 'cross', 'wrong': 'cross', 'false': 'cross', 'stop': 'cross', 'error': 'cross', 'fail': 'cross',
+                        'chart': 'chart', 'growth': 'chart', 'analytics': 'chart', 'numbers': 'chart', 'data': 'chart', 'scale': 'chart', 'trending': 'chart',
+                        'lightbulb': 'lightbulb', 'idea': 'lightbulb', 'smart': 'lightbulb', 'genius': 'lightbulb', 'mind': 'lightbulb', 'learn': 'lightbulb', 'think': 'lightbulb',
+                        'shield': 'shield', 'secure': 'shield', 'safe': 'shield', 'protect': 'shield', 'trust': 'shield', 'privacy': 'shield',
+                        'lock': 'lock', 'secret': 'lock', 'locked': 'lock', 'password': 'lock', 'private': 'lock'
+                    };
+                    const cleanWords = args.words.map(w => w.replace(/[^a-zA-Z]/g, '').toLowerCase());
+                    for (let i = 0; i < cleanWords.length; i++) {
+                        let w = cleanWords[i];
+                        if (aliases[w] && args.svg_map[aliases[w]]) {
+                            foundIcon = args.svg_map[aliases[w]];
+                            triggerIndex = i;
+                            break;
+                        }
+                    }
+                    // Inject a dynamic silver metallic gradient definition if it doesn't exist yet
+                    if (!document.getElementById('silver-grad-def')) {
+                        const defDiv = document.createElement('div');
+                        defDiv.innerHTML = `
+                            <svg width="0" height="0" id="silver-grad-def" style="position:absolute;">
+                                <defs>
+                                    <linearGradient id="premiumSilver" x1="0%" y1="0%" x2="100%" y2="100%">
+                                        <stop offset="0%" stop-color="#ffffff"/>
+                                        <stop offset="30%" stop-color="#dceaff"/>
+                                        <stop offset="50%" stop-color="#9fc4ff"/>
+                                        <stop offset="70%" stop-color="#dceaff"/>
+                                        <stop offset="100%" stop-color="#ffffff"/>
+                                    </linearGradient>
+                                </defs>
+                            </svg>
+                        `;
+                        wrapEl.appendChild(defDiv);
+                    }
+
+                    if (foundIcon) {
+                        const iconDiv = document.createElement('div');
+                        // Replace 'currentColor' with our premium silver metallic gradient URL
+                        iconDiv.innerHTML = foundIcon.replace(/stroke="currentColor"/g, 'stroke="url(#premiumSilver)"');
+                        
+                        // Intense stacked drop-shadow for the ultimate glowing effect
+                        iconDiv.style.cssText = 'filter: drop-shadow(0 0 25px rgba(160, 200, 255, 0.95)) drop-shadow(0 0 10px rgba(255, 255, 255, 1));';
+                        
+                        iconDiv.style.position = 'absolute';
+                        iconDiv.style.top = '40%';
+                        iconDiv.style.left = '50%';
+                        iconDiv.style.zIndex = '-1';
+                        
+                        // Size the SVG
+                        const iconSize = baseSize * 3.5; 
+                        iconDiv.style.width = iconSize + 'px';
+                        iconDiv.style.height = iconSize + 'px';
+                        
+                        // ✨ ICON ANIMATION LOGIC ✨
+                        // Glow brightly at full opacity when triggered, otherwise subtle background glow
+                        if (args.active_index === triggerIndex) {
+                            iconDiv.style.opacity = '1.0';
+                            iconDiv.style.transform = 'translate(-50%, -50%) scale(1.15)';
+                            iconDiv.style.transition = 'transform 0.1s ease-out, opacity 0.1s ease-out';
+                        } else {
+                            iconDiv.style.opacity = '0.35';
+                            iconDiv.style.transform = 'translate(-50%, -50%) scale(0.9)';
+                        }
+                        
+                        wrapEl.appendChild(iconDiv);
+                    }
                 }
             """, {
                 "words": list(phrase_words),
@@ -610,7 +745,8 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
                 "p_class": p_class,
                 "s_class": s_class,
                 "mixed_style": mixed_style,
-                "scale": cap_scale
+                "scale": cap_scale,
+                "svg_map": svg_map
             })
             page.screenshot(path=png_path, full_page=False, omit_background=True)
             rendered_done.add(key)
@@ -704,7 +840,7 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
 # 6. SINHALA TRANSCRIPT via GEMINI
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> list:
+def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None, whisper_words: list = None) -> list:
     from google import genai
     from google.genai import types
     import time
@@ -733,9 +869,20 @@ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None) -> 
     
     print(f"[⚙️] Will try {len(keys_to_try)} API key(s)...")
 
-    prompt = """
+    import subprocess
+    try:
+        probe_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path]
+        dur_out = subprocess.check_output(probe_cmd, text=True).strip()
+        audio_dur = float(dur_out)
+        duration_text = f"The total length of this audio is exactly {audio_dur:.2f} seconds. Your timestamps MUST NOT exceed this duration."
+    except Exception:
+        duration_text = "Pay close attention to the length of the audio."
+
+    prompt = f"""
     Listen to this audio. It is a mix of Sinhala and English (Singlish).
     Write down EXACTLY what is said, verbatim.
+    
+    IMPORTANT CONTEXT: {duration_text}
     
     CRITICAL RULES: 
     1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
@@ -998,9 +1145,77 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
         check=True, capture_output=True
     )
 
-    # 2. Get Perfect Phrases + Rough Timestamps from Gemini
+    # 2. Get Timestamps via Whisper (Run FIRST so we can feed it to Gemini!)
     manual_gemini_json = cap_options.get("manualGeminiJson", "").strip()
     is_manual_gemini = cap_options.get("useManualGemini", False) and bool(manual_gemini_json)
+    
+    whisper_words = []
+    if is_manual_gemini:
+        print("[⚙️] Bypassing Whisper entirely for Manual JSON...")
+    else:
+        print("[⚙️] Running Whisper (base) — SEGMENT-ANCHOR mode for Sinhala...")
+        try:
+            from faster_whisper import WhisperModel
+            import importlib.util
+            if os.name == 'nt':
+                try:
+                    for pkg in ["nvidia.cublas", "nvidia.cudnn", "nvidia.cufft", "nvidia.curand", "nvidia.cusolver", "nvidia.cusparse", "nvidia.nvtx", "nvidia.nccl"]:
+                        spec = importlib.util.find_spec(pkg)
+                        if spec and spec.submodule_search_locations:
+                            bin_path = os.path.join(spec.submodule_search_locations[0], "bin")
+                            if os.path.exists(bin_path):
+                                os.environ["PATH"] = bin_path + os.pathsep + os.environ.get("PATH", "")
+                except Exception:
+                    pass
+
+            try:
+                w_model = WhisperModel("base", device="cuda", compute_type="int8")
+            except Exception:
+                w_model = WhisperModel("base", device="cpu", compute_type="int8")
+
+            w_segments_raw, _ = w_model.transcribe(
+                temp_audio,
+                word_timestamps=True,
+                vad_filter=True,
+                condition_on_previous_text=False
+            )
+            w_segments_list = list(w_segments_raw)
+
+            for seg in w_segments_list:
+                whisper_words.append({
+                    "word":  "[seg]",
+                    "start": seg.start,
+                    "end":   seg.end
+                })
+
+            word_anchors = []
+            for seg in w_segments_list:
+                for w in (seg.words or []):
+                    if w.word.strip():
+                        word_anchors.append({
+                            "word":  w.word.strip(),
+                            "start": w.start,
+                            "end":   w.end
+                        })
+
+            if len(word_anchors) > 0:
+                combined = whisper_words + word_anchors
+                combined.sort(key=lambda x: x["start"])
+                deduped = [combined[0]] if combined else []
+                for a in combined[1:]:
+                    if a["start"] - deduped[-1]["start"] > 0.05:
+                        deduped.append(a)
+                whisper_words = deduped
+                print(f"[⚙️] Using {len(w_segments_list)} segment + {len(word_anchors)} word anchors "
+                      f"→ {len(whisper_words)} total after dedup.")
+            else:
+                print(f"[⚙️] Using {len(whisper_words)} segment-level anchors.")
+
+        except Exception as e:
+            print(f"[⚠️] Whisper failed ({e}). Falling back to Gemini timestamps without hints.")
+            whisper_words = []
+
+    # 3. Get Perfect Phrases from Gemini (using Whisper hints if available)
     if is_manual_gemini:
         print("[⚙️] Manual Gemini JSON detected! Bypassing API call entirely.")
         try:
@@ -1009,7 +1224,7 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
             print(f"[❌] FATAL: Invalid manual JSON: {e}")
             gemini_phrases = []
     else:
-        gemini_phrases = get_perfect_sinhala_transcript(temp_audio, cap_options.get("geminiApiKey"))
+        gemini_phrases = get_perfect_sinhala_transcript(temp_audio, cap_options.get("geminiApiKey"), whisper_words)
 
     if not gemini_phrases:
         print("[❌] FATAL: Gemini failed. Cannot render captions.")
@@ -1018,74 +1233,12 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
 
     print(f"[⚙️] Extracted {len(gemini_phrases)} Singlish phrases from Gemini.")
 
-    # ── STEP 2: Whisper — SEGMENT MODE (most reliable for Sinhala) ───────────
-    print("[⚙️] Running Whisper (base) — SEGMENT-ANCHOR mode for Sinhala...")
-    whisper_words = []
-    try:
-        from faster_whisper import WhisperModel
-        import importlib.util
-        if os.name == 'nt':
-            try:
-                for pkg in ["nvidia.cublas", "nvidia.cudnn", "nvidia.cufft", "nvidia.curand", "nvidia.cusolver", "nvidia.cusparse", "nvidia.nvtx", "nvidia.nccl"]:
-                    spec = importlib.util.find_spec(pkg)
-                    if spec and spec.submodule_search_locations:
-                        bin_path = os.path.join(spec.submodule_search_locations[0], "bin")
-                        if os.path.exists(bin_path):
-                            os.environ["PATH"] = bin_path + os.pathsep + os.environ.get("PATH", "")
-            except Exception:
-                pass
-
-        try:
-            w_model = WhisperModel("base", device="cuda", compute_type="int8")
-        except Exception:
-            w_model = WhisperModel("base", device="cpu", compute_type="int8")
-
-        w_segments_raw, _ = w_model.transcribe(
-            temp_audio,
-            word_timestamps=True,
-            vad_filter=True,
-            condition_on_previous_text=False
-        )
-        w_segments_list = list(w_segments_raw)
-
-        for seg in w_segments_list:
-            whisper_words.append({
-                "word":  "[seg]",
-                "start": seg.start,
-                "end":   seg.end
-            })
-
-        word_anchors = []
-        for seg in w_segments_list:
-            for w in (seg.words or []):
-                if w.word.strip():
-                    word_anchors.append({
-                        "word":  w.word.strip(),
-                        "start": w.start,
-                        "end":   w.end
-                    })
-
-        if len(word_anchors) >= len(gemini_phrases) * 1.5:
-            combined = whisper_words + word_anchors
-            combined.sort(key=lambda x: x["start"])
-            deduped = [combined[0]] if combined else []
-            for a in combined[1:]:
-                if a["start"] - deduped[-1]["start"] > 0.05:
-                    deduped.append(a)
-            whisper_words = deduped
-            print(f"[⚙️] Using {len(w_segments_list)} segment + {len(word_anchors)} word anchors "
-                  f"→ {len(whisper_words)} total after dedup.")
-        else:
-            print(f"[⚙️] Using {len(whisper_words)} segment-level anchors "
-                  f"(word anchors too sparse: {len(word_anchors)}).")
-
-    except Exception as e:
-        print(f"[⚠️] Whisper failed ({e}). Falling back to Gemini timestamps.")
-        whisper_words = []
-
     # ── STEP 3: Drift-corrected alignment ────────────────────────────────────
-    if whisper_words:
-        segments_data = align_phrases_to_whisper(gemini_phrases, whisper_words, from_manual=is_manual_gemini)
+    if is_manual_gemini:
+        segments_data = align_phrases_to_whisper(gemini_phrases, [], from_manual=True)
+        print(f"[✅] Manual alignment done — {len(segments_data)} synced phrases.")
+    elif whisper_words:
+        segments_data = align_phrases_to_whisper(gemini_phrases, whisper_words, from_manual=False)
         print(f"[✅] Alignment done — {len(segments_data)} synced phrases.")
     else:
         print("[⚠️] Using Gemini timestamps with +0.10s offset as fallback.")
@@ -1095,6 +1248,12 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
              "end":    p["end"]   + 0.10}
             for p in gemini_phrases
         ]
+
+    hook_pri_text = cap_options.get("hookPrimaryText", "").strip()
+    hook_sec_text = cap_options.get("hookSecondaryText", "").strip()
+    if cap_options.get("hookEngine") and (hook_pri_text or hook_sec_text):
+        hook_dur = float(cap_options.get("hookDuration", 1.5))
+        segments_data = [s for s in segments_data if float(s["start"]) >= hook_dur]
 
     # ── NEW: Extract your Full-Stops for the Transition Engine ──
     flash_times = []
@@ -1138,8 +1297,8 @@ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
     background-clip: text; color: transparent;
   }}
   .si-font-main {{ font-family: 'Gemunu Libre', sans-serif; font-weight: 800; }}
-  .si-font-pri {{ font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -0.5px; }}
-  .si-font-sec {{ font-family: 'Montserrat', sans-serif; font-weight: 900; letter-spacing: -1px; }}
+  .si-font-pri {{ font-family: 'Montserrat', 'Gemunu Libre', sans-serif; font-weight: 900; letter-spacing: -0.5px; }}
+  .si-font-sec {{ font-family: 'Montserrat', 'Gemunu Libre', sans-serif; font-weight: 900; letter-spacing: -1px; }}
 
   /* Main (Sinhala) */
   .si-main-blue {{ background-image: linear-gradient(to bottom, #82cfff 0%, #0077ff 100%); filter: drop-shadow(0 0 12px rgba(0, 100, 255, 0.9)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
@@ -1353,11 +1512,22 @@ def stage_bottom_glow(video_path: str, color_hex: str) -> str:
     cv2.imwrite(overlay_png, glow_img)
     
     filter_complex = f"[1:v]format=rgba[glow];[0:v][glow]overlay=x=0:y={H - glow_h}:format=auto[outv]"
+    try:
+        subprocess.run(["ffmpeg", "-f", "lavfi", "-i", "nullsrc", "-c:v", "h264_nvenc", "-t", "1", "-f", "null", "-"], check=True, capture_output=True)
+        cvcodec = "h264_nvenc"
+        preset = "p6"
+        cq_args = ["-cq", "18"]
+    except:
+        cvcodec = "libx264"
+        preset = "superfast"
+        cq_args = ["-crf", "18"]
+
     cmd = [
         "ffmpeg", "-hwaccel", "auto", "-i", video_path, "-i", overlay_png,
         "-filter_complex", filter_complex,
         "-map", "[outv]", "-map", "0:a?",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:v", cvcodec, "-preset", preset
+    ] + cq_args + [
         "-pix_fmt", "yuv420p", "-c:a", "copy",
         output_vid, "-y"
     ]
@@ -2114,6 +2284,59 @@ def stage_hardcode_flash(video_path: str, options: dict) -> str:
 
 
 # ─────────────────────────────────────────────
+# 14.5 AUDIO MERGER ENGINE
+# ─────────────────────────────────────────────
+
+def stage_merge_audio(video_path: str, options: dict) -> str:
+    audio_path = options.get("mergeAudioPath", "").strip()
+    if not audio_path or not os.path.exists(audio_path):
+        print(f"[⚠️] Audio Merger skipped: No valid audio file provided.")
+        return video_path
+        
+    print(f"[⚙️] Booting Audio Merger Engine... Merging {os.path.basename(audio_path)}")
+    
+    base_dir = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_merged.mp4"
+    
+    # We re-encode the video (using hardware acceleration if possible) to completely rebuild the PTS 
+    # starting from zero. This prevents massive desyncs when later applying caption overlays.
+    try:
+        import subprocess
+        subprocess.run(["ffmpeg", "-f", "lavfi", "-i", "nullsrc", "-c:v", "h264_nvenc", "-t", "1", "-f", "null", "-"], check=True, capture_output=True)
+        cvcodec = "h264_nvenc"
+        preset = "p6"
+        cq_args = ["-cq", "18"]
+    except:
+        cvcodec = "libx264"
+        preset = "superfast"
+        cq_args = ["-crf", "18"]
+
+    cmd = [
+        "ffmpeg", "-hwaccel", "auto", "-y", "-i", video_path, "-i", audio_path,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", cvcodec, "-preset", preset
+    ] + cq_args + [
+        "-c:a", "aac", "-b:a", "256k",
+        "-filter:a", "volume=4dB",
+        "-shortest",
+        output_vid
+    ]
+    
+    try:
+        import subprocess
+        subprocess.run(cmd, check=True, capture_output=True)
+        print(f"[✅] Audio merged successfully: {output_vid}")
+        return output_vid
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        print(f"[❌] Audio merger failed: {err_msg}")
+        return video_path
+    except Exception as e:
+        print(f"[❌] Audio merger failed: {e}")
+        return video_path
+
+
+# ─────────────────────────────────────────────
 # 15. MP4 → MP3 CONVERSION ENGINE
 # ─────────────────────────────────────────────
 
@@ -2492,6 +2715,219 @@ def stage_cinematic_grade(video_path: str, options: dict) -> str:
     return output_vid
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 15.5 TEXT PATTERN INTERRUPT HOOK ENGINE
+# ─────────────────────────────────────────────────────────────────────────────
+def stage_visual_hook(video_path: str, options: dict) -> str:
+    import json
+    import os
+    import subprocess
+    from playwright.sync_api import sync_playwright
+
+    hook_pri_text = options.get("hookPrimaryText", "").strip()
+    hook_sec_text = options.get("hookSecondaryText", "").strip()
+    if not hook_pri_text and not hook_sec_text:
+        return video_path
+        
+    print(f"[⚙️] Booting Visual Text Hook Engine (Pattern Interrupt)...")
+    
+    base_dir = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_texthook.mp4"
+    png_path = os.path.join(base_dir, "_hook_overlay.png")
+    
+    hook_dur = float(options.get("hookDuration", 1.5))
+    hook_y = float(options.get("hookYPercent", 40))
+    hook_size = float(options.get("hookSizePercent", 100))
+    pri_style = options.get("hookPrimaryStyle", "s-electric-teal")
+    sec_style = options.get("hookSecondaryStyle", "s-crimson-red")
+    hook_bg_color = options.get("hookBgColor", "transparent")
+    
+    # Backward compatibility if frontend wasn't refreshed
+    style_map = {
+        "style-yellow-gradient": "s-hormozi-yellow",
+        "style-red-gradient": "s-crimson-red",
+        "style-neon-cyan": "s-electric-teal",
+        "style-glass-silver": "p-glass-silver",
+        "style-white-stroke": "p-clean-white",
+        "style-black-box": "p-heavy-stroke"
+    }
+    pri_style = style_map.get(pri_style, pri_style)
+    sec_style = style_map.get(sec_style, sec_style)
+    
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "json", video_path],
+        capture_output=True, text=True
+    )
+    try:
+        info = json.loads(probe.stdout)["streams"][0]
+        W, H = int(info["width"]), int(info["height"])
+    except:
+        W, H = 1080, 1920
+        
+    safe_pri = hook_pri_text.replace("'", "\\'").replace('"', '\\"').replace('\n', ' ')
+    safe_sec = hook_sec_text.replace("'", "\\'").replace('"', '\\"').replace('\n', ' ')
+    
+    size_mult = hook_size / 100.0
+    
+    # Smart Auto-Sizing: Calculate max chars to prevent screen bleed
+    pri_len = len(hook_pri_text) if hook_pri_text else 0
+    sec_len = len(hook_sec_text) if hook_sec_text else 0
+    max_len = max(pri_len, sec_len, 1)
+    
+    # Montserrat 900 char width is approx 75% of its height.
+    # We want max width to be 90% of video width (W * 0.90)
+    # font_size * max_len * 0.75 = W * 0.90  => font_size = W * 1.2 / max_len
+    calc_size = int((W * 1.2) / max_len)
+    
+    # Cap the maximum size so short words (e.g. "HI") don't look comically huge
+    base_dim = min(W, H)
+    max_allowed = int(base_dim * 0.16)
+    
+    base_font = min(calc_size, max_allowed)
+    huge_font = int(base_font * size_mult)
+    
+    glass_css = ""
+    if hook_bg_color == "dark-blue-glow":
+        glass_css = (
+            "background: rgba(0, 20, 60, 0.6);\n"
+            "            border: 2px solid rgba(0, 150, 255, 0.4);\n"
+            "            border-radius: 30px;\n"
+            "            padding: 40px 60px;\n"
+            "            box-shadow: 0 0 50px rgba(0, 100, 255, 0.8), inset 0 1px 0 rgba(255,255,255,0.2);"
+        )
+    elif hook_bg_color == "silver-glow":
+        glass_css = (
+            "background: rgba(255, 255, 255, 0.1);\n"
+            "            border: 2px solid rgba(255, 255, 255, 0.6);\n"
+            "            border-radius: 30px;\n"
+            "            padding: 40px 60px;\n"
+            "            box-shadow: 0 0 40px rgba(200, 220, 255, 0.7), inset 0 1px 0 rgba(255,255,255,0.5);"
+        )
+    elif hook_bg_color and hook_bg_color.lower() != "transparent":
+        glass_css = (
+            f"background: {hook_bg_color};\n"
+            f"            border: 2px solid rgba(255, 255, 255, 0.15);\n"
+            f"            border-radius: 30px;\n"
+            f"            padding: 40px 60px;\n"
+            f"            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.2);"
+        )
+    
+    html_content = f"""<!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="UTF-8">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Anton&family=Bangers&family=Gemunu+Libre:wght@800&family=Great+Vibes&family=Montserrat:wght@800;900&family=Oswald:wght@700&family=Poppins:wght@800;900&display=swap');
+        @import url('https://fonts.cdnfonts.com/css/proxima-nova-2');
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ width: {W}px; height: {H}px; background: transparent; overflow: hidden; position: relative; }}
+        
+        .hook-container {{
+            position: absolute;
+            max-width: 90%;
+            left: 50%;
+            top: {hook_y}%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            {glass_css}
+        }}
+        
+        .text-line {{
+            font-family: 'Montserrat', 'Gemunu Libre', sans-serif;
+            font-style: normal;
+            font-size: {huge_font}px;
+            font-weight: 900;
+            line-height: 0.95;
+            letter-spacing: -2px;
+            text-transform: uppercase;
+            white-space: nowrap;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text; color: transparent;
+            margin-bottom: 5px;
+        }}
+        
+        .p-glass-silver {{ background-image: linear-gradient(160deg, #fff 0%, #d2e8ff 30%, #b4d7ff 55%, #ebf6ff 75%, #fff 100%); filter: drop-shadow(0 0 10px rgba(140,185,255,0.50)) drop-shadow(0 1px 3px rgba(60,100,200,0.35)); }}
+        .p-clean-white  {{ background-image: linear-gradient(to bottom, #ffffff 0%, #e0e0e0 100%); filter: drop-shadow(0 3px 6px rgba(0,0,0,0.8)); }}
+        .p-heavy-stroke {{ background-image: linear-gradient(to bottom, #ffffff, #ffffff); filter: drop-shadow(2px 0 0 #000) drop-shadow(-2px 0 0 #000) drop-shadow(0 2px 0 #000) drop-shadow(0 -2px 0 #000) drop-shadow(0 5px 12px rgba(0,0,0,0.9)); }}
+        .p-soft-yellow  {{ background-image: linear-gradient(to bottom, #FFFDE7 0%, #FFF176 100%); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7)); }}
+        .p-neon-base    {{ background-image: linear-gradient(to bottom, #ffffff 0%, #e0f7fa 100%); filter: drop-shadow(0 0 10px rgba(0,255,255,0.4)) drop-shadow(0 2px 2px rgba(0,0,0,0.8)); }}
+        .p-silver-translucent {{ background-image: linear-gradient(160deg, rgba(255,255,255,0.9) 0%, rgba(200,225,255,0.6) 100%); filter: drop-shadow(0 0 10px rgba(180,200,255,0.4)) drop-shadow(0 1px 2px rgba(0,0,0,0.8)); }}
+        .p-sunset-glow  {{ background-image: linear-gradient(160deg, #ff7e5f 0%, #feb47b 100%); filter: drop-shadow(0 0 12px rgba(255,126,95,0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }}
+      
+        .s-electric-teal  {{ background-image: linear-gradient(to right, #00dcc8 0%, #00c3d2 50%, #00aadc 100%); filter: drop-shadow(0 0 15px rgba(0,210,200,0.75)) drop-shadow(0 2px 6px rgba(0,150,180,0.9)); }}
+        .s-hormozi-yellow {{ background-image: linear-gradient(to bottom, #FFE81F 0%, #FF8A00 100%); filter: drop-shadow(0 0 15px rgba(255,165,0,0.6)) drop-shadow(0 3px 6px rgba(0,0,0,0.9)); }}
+        .s-crimson-red    {{ background-image: linear-gradient(to bottom, #ff4b4b 0%, #b30000 100%); filter: drop-shadow(0 0 15px rgba(255,0,0,0.8)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }}
+        .s-cyber-purple   {{ background-image: linear-gradient(to right, #d500f9 0%, #651fff 100%); filter: drop-shadow(0 0 15px rgba(213,0,249,0.7)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }}
+        
+    </style>
+    </head>
+    <body>
+        <div class="hook-container" id="hook-text">
+        </div>
+        <script>
+            const priText = "{safe_pri}";
+            const secText = "{safe_sec}";
+            const priStyle = "{pri_style}";
+            const secStyle = "{sec_style}";
+            
+            let html = '';
+            if (priText) {{
+                html += `<div class="text-line ${{priStyle}}">${{priText}}</div>`;
+            }}
+            if (secText) {{
+                html += `<div class="text-line ${{secStyle}}">${{secText}}</div>`;
+            }}
+            
+            document.getElementById('hook-text').innerHTML = html;
+        </script>
+    </body>
+    </html>
+    """
+    
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context(viewport={"width": W, "height": H}, device_scale_factor=1)
+        page = context.new_page()
+        page.set_content(html_content, wait_until="networkidle")
+        page.screenshot(path=png_path, omit_background=True)
+        browser.close()
+        
+    print("[⚙️] Compositing Snap-Zoom Pattern Interrupt with FFmpeg...")
+    
+    # Fast punchy camera flash at start, plus glitchy shake for 0.15s
+    # (Flash removed so it doesn't overwrite the Visual SFX Hook underneath)
+    shake_x = "if(lte(t,0.15), (random(1)-0.5)*15, 0)"
+    shake_y = "if(lte(t,0.15), (random(1)-0.5)*15, 0)"
+    
+    cmd = [
+        "ffmpeg", "-hwaccel", "auto", "-i", video_path, "-i", png_path,
+        "-filter_complex",
+        f"[0:v][1:v]overlay=x='{shake_x}':y='{shake_y}':enable='between(t,0,{hook_dur})'[outv]",
+        "-map", "[outv]", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "17",
+        "-c:a", "copy",
+        output_vid, "-y"
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        if os.path.exists(png_path): os.remove(png_path)
+        print(f"[✅] Visual Text Hook applied: {output_vid}")
+        return output_vid
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        print(f"[❌] Visual Text Hook failed: {err_msg}")
+        if os.path.exists(png_path): os.remove(png_path)
+        return video_path
+
+
 # 16. HEADLESS CSS VISUAL HOOK ENGINE (Playwright + Web Animations)
 #     "The Subject Arrives" — AE/TikTok Grade via HTML DOM Compositing
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2534,7 +2970,11 @@ def stage_starting_hook(video_path: str, options: dict) -> str:
     width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     dur    = 0.35  # 350ms snappy cinematic intro
+    if hook_type == 'blur_zoom':
+        dur = 0.45  # Reduced from 0.85 to 0.45 so it doesn't feel 'stuck' on a frozen frame
+
     hook_frames = int(fps * dur)
+    actual_dur = hook_frames / fps
 
     # Grab the first non-black frame
     first_frame = None
@@ -2840,6 +3280,22 @@ def stage_starting_hook(video_path: str, options: dict) -> str:
                 if(c3) c3.style.opacity = 0;
                 cflash.style.opacity = bloom * 0.9;
             }}
+
+            else if (hookType === 'blur_zoom') {{
+                // Use Quint instead of Expo for a slower, smoother, more cinematic glide
+                let decay = easeOutQuint(progress);
+                
+                // Enhanced cinematic blur zoom: Starts at 1.5x scale, 30px blur, and 1.8x brightness
+                let currentScale = 1.5 - (0.5 * decay);
+                let currentBlur = 30 - (30 * decay);
+                let currentBrightness = 1.0 + (0.8 * (1 - decay));
+                
+                sub.style.transform = `scale(${{currentScale}})`;
+                sub.style.filter = `${{premiumSubjectShadow}} blur(${{currentBlur}}px) brightness(${{currentBrightness}})`;
+                
+                c1.style.opacity = 0; c2.style.opacity = 0; if(c3) c3.style.opacity = 0;
+                cflash.style.opacity = 0;
+            }}
         }}
       </script>
     </body>
@@ -2863,7 +3319,7 @@ def stage_starting_hook(video_path: str, options: dict) -> str:
 
     # ── 4. FFmpeg Compositing ─────────────────────────────────────────────
     print("[⚙️] Re-compositing sequence with audio...")
-    sfx_map   = {"flash":"flash_sfx.MP3","flash_drop":"flash_sfx.MP3", "drop_in":"impact_sfx.MP3","glitch":"glitch_sfx.MP3","impact":"impact_sfx.MP3", "capcut_drop":"glitch_sfx.MP3"}
+    sfx_map   = {"flash":"flash_sfx.MP3","flash_drop":"flash_sfx.MP3", "drop_in":"impact_sfx.MP3","glitch":"glitch_sfx.MP3","impact":"impact_sfx.MP3", "capcut_drop":"glitch_sfx.MP3", "blur_zoom":"woosh with echo.MP3"}
     sfx_audio = os.path.join(engine_dir, "assets", sfx_map.get(hook_type, ""))
     has_sfx   = os.path.exists(sfx_audio)
 
@@ -2874,9 +3330,9 @@ def stage_starting_hook(video_path: str, options: dict) -> str:
     ], check=True, capture_output=True)
 
     # Overlay temp video over main video for duration, mix SFX
-    fc = (f"[0:v]tpad=start_duration={dur}:start_mode=clone[v_main];"
+    fc = (f"[0:v]tpad=start_duration={actual_dur:.4f}:start_mode=clone[v_main];"
           f"[v_main][1:v]overlay=eof_action=pass[v_out];"
-          f"[0:a]adelay={int(dur*1000)}:all=1[main_a]")
+          f"[0:a]adelay={int(actual_dur*1000)}:all=1[main_a]")
     
     if has_sfx:
         fc += f";[2:a]volume=1.5[sfx];[main_a][sfx]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[a_final]"
@@ -2903,36 +3359,240 @@ def stage_starting_hook(video_path: str, options: dict) -> str:
 # 18. LIGHTNING-FAST STABILIZATION ENGINE
 # ─────────────────────────────────────────────
 
+def _interpolate_nans(arr: np.ndarray) -> np.ndarray:
+    """Linearly interpolate NaN gaps (dropped detections) instead of
+    forward-filling. Forward-fill creates a flat plateau followed by a
+    step-jump when detection resumes, which the gaussian filter reads
+    as a spike and 'corrects' -> visible micro-jolt in output."""
+    n = len(arr)
+    valid = ~np.isnan(arr)
+    if valid.sum() == 0:
+        return arr
+    if valid.sum() == n:
+        return arr
+    idx = np.arange(n)
+    arr = arr.copy()
+    arr[~valid] = np.interp(idx[~valid], idx[valid], arr[valid])
+    return arr
+
+
+def _soft_clip(arr: np.ndarray, limit: float) -> np.ndarray:
+    """Tanh-based soft clip: stays linear (transparent) well under the
+    limit, smoothly compresses anything beyond it. Avoids the hard
+    discontinuity a plain np.clip would introduce frame-to-frame."""
+    if limit <= 0:
+        return arr
+    return limit * np.tanh(arr / limit)
+
+
 def stage_fast_stabilize(video_path: str, options: dict) -> str:
-    print("[⚙️] Booting Lightning-Fast Stabilizer (1-Pass Deshake)...")
-    
     import os
     import subprocess
-    
-    base_dir   = os.path.dirname(os.path.abspath(video_path))
-    output_vid = os.path.splitext(video_path)[0] + "_stabilized.mp4"
+    import cv2
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d, median_filter
+    import urllib.request
 
-    # The deshake filter settings:
-    # rx/ry: Maximum pixel search range (64 is a good balance for speed/accuracy)
-    # edge=smear: Fills the black borders caused by the camera stabilization with smeared edge pixels
-    filter_chain = "deshake=x=40:y=40:rx=64:ry=64:edge=smear"
+    engine_backend = options.get('stabilizerBackend', 'cpu')
+    if engine_backend == 'gpu':
+        print("[⚙️] Booting AI Facial Anchor Stabilizer (PyTorch GPU Mode) v2...")
+    else:
+        print("[⚙️] Booting AI Facial Anchor Stabilizer (Micro-Shock Absorber CPU) v2...")
+
+    base_dir = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_stabilized.mp4"
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
 
     try:
-        # Utilizing hardware acceleration where possible, keeping the fast preset and copying audio
-        subprocess.run([
-            "ffmpeg", "-hwaccel", "auto", "-y", "-i", video_path,
-            "-vf", filter_chain,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-            "-c:a", "copy",
-            output_vid
-        ], check=True, capture_output=True)
-        
-        print(f"[✅] Video stabilized seamlessly: {output_vid}")
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        print(f"[⚙️] Pass 1: Extracting rigid facial trajectory (multi-point anchor using {engine_backend.upper()})...")
+        raw_x, raw_y = [], []
+        valid_frames = []
+
+        if engine_backend == 'gpu':
+            try:
+                from facenet_pytorch import MTCNN
+                import torch
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                # MTCNN takes RGB images
+                mtcnn = MTCNN(keep_all=False, device=device)
+                
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    # MTCNN runs very fast on GPU even without downscaling, but we downscale slightly just in case
+                    process_w = 640
+                    scale_ratio = process_w / width
+                    process_h = int(height * scale_ratio)
+                    small_frame = cv2.resize(frame, (process_w, process_h), interpolation=cv2.INTER_LINEAR)
+                    rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                    
+                    boxes, probs, landmarks = mtcnn.detect(rgb_frame, landmarks=True)
+                    if landmarks is not None and len(landmarks) > 0:
+                        # landmarks[0] contains 5 points: left eye, right eye, nose, left mouth, right mouth
+                        lm = landmarks[0] 
+                        xs = [p[0] / scale_ratio for p in lm]
+                        ys = [p[1] / scale_ratio for p in lm]
+                        raw_x.append(float(np.mean(xs)))
+                        raw_y.append(float(np.mean(ys)))
+                        valid_frames.append(True)
+                    else:
+                        raw_x.append(np.nan)
+                        raw_y.append(np.nan)
+                        valid_frames.append(False)
+            except ImportError:
+                print("[⚠️] facenet-pytorch not installed! Falling back to CPU...")
+                engine_backend = 'cpu' # Fallthrough to CPU below...
+                
+        if engine_backend == 'cpu':
+            import mediapipe as mp
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision
+            
+            # ─── Load MediaPipe Face Landmarker ───────────────────────────────────
+            model_path = os.path.join(engine_dir, "pretrained_models", "face_landmarker.task")
+            if not os.path.exists(model_path):
+                print("[⚙️] Downloading MediaPipe Face Landmarker model...")
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                try:
+                    urllib.request.urlretrieve(
+                        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+                        model_path
+                    )
+                except Exception as e:
+                    print(f"[⚠️] Failed to download model: {e}. Using original video.")
+                    return video_path
+                    
+            base_options = mp_python.BaseOptions(model_asset_path=model_path)
+            task_options = vision.FaceLandmarkerOptions(
+                base_options=base_options,
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False,
+                num_faces=1
+            )
+            ANCHOR_IDS = [4, 6, 168, 133, 362]
+            with vision.FaceLandmarker.create_from_options(task_options) as landmarker:
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    # 🔥 DOWN-SCALE FOR 10X FASTER CPU INFERENCE
+                    process_w = 480
+                    scale_ratio = process_w / width
+                    process_h = int(height * scale_ratio)
+                    
+                    small_frame = cv2.resize(frame, (process_w, process_h), interpolation=cv2.INTER_LINEAR)
+                    rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                    
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                    detection = landmarker.detect(mp_image)
+
+                    if detection.face_landmarks:
+                        lm = detection.face_landmarks[0]
+                        xs = [lm[i].x * width for i in ANCHOR_IDS]
+                        ys = [lm[i].y * height for i in ANCHOR_IDS]
+                        raw_x.append(float(np.mean(xs)))
+                        raw_y.append(float(np.mean(ys)))
+                        valid_frames.append(True)
+                    else:
+                        raw_x.append(np.nan)
+                        raw_y.append(np.nan)
+                        valid_frames.append(False)
+
+        cap.release()
+
+        if not any(valid_frames):
+            print("[⚠️] No face detected. Cannot anchor-stabilize. Falling back to original.")
+            return video_path
+
+        trajectory_x = np.array(raw_x, dtype=np.float64)
+        trajectory_y = np.array(raw_y, dtype=np.float64)
+
+        print("[⚙️] Pass 1b: Interpolating dropped-detection gaps...")
+        trajectory_x = _interpolate_nans(trajectory_x)
+        trajectory_y = _interpolate_nans(trajectory_y)
+
+        print("[⚙️] Pass 2: Median pre-filter to strip outlier spikes...")
+        # A short median filter removes single/double-frame outliers (blinks,
+        # partial occlusion, brief misdetection) WITHOUT smearing real motion,
+        # unlike the gaussian which just blends outliers into the trajectory.
+        median_k = int(options.get("medianKernel", 5))
+        if median_k % 2 == 0:
+            median_k += 1
+        trajectory_x = median_filter(trajectory_x, size=median_k, mode="nearest")
+        trajectory_y = median_filter(trajectory_y, size=median_k, mode="nearest")
+
+        print("[⚙️] Pass 3: Applying low-pass filter to isolate real (slow) motion...")
+        sigma_val = float(options.get("vibrationFilterStrength", 8.0))
+        smoothed_x = gaussian_filter1d(trajectory_x, sigma=sigma_val, mode="nearest")
+        smoothed_y = gaussian_filter1d(trajectory_y, sigma=sigma_val, mode="nearest")
+
+        shift_x = trajectory_x - smoothed_x
+        shift_y = trajectory_y - smoothed_y
+
+        print("[⚙️] Pass 3b: Clamping correction magnitude...")
+        # If a correction is asking for a huge shift, it's not "shake" -
+        # it's either a genuine fast head movement or a leftover detection
+        # glitch. Either way, over-correcting it is what produces the
+        # "too much shake" feeling. Clamp + soft-taper instead of hard cut,
+        # so we don't introduce a new discontinuity.
+        max_shift_px = float(options.get("maxCorrectionPx", 12.0))
+        shift_x = _soft_clip(shift_x, max_shift_px)
+        shift_y = _soft_clip(shift_y, max_shift_px)
+
+        print("[⚙️] Pass 4: Rendering smooth frames via FFmpeg pipe...")
+        cmd = [
+            "ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
+            "-s", f"{width}x{height}", "-pix_fmt", "bgr24", "-r", str(fps), "-i", "-",
+            "-i", video_path, "-map", "0:v:0", "-map", "1:a:0?",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-c:a", "copy", output_vid
+        ]
+
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cap = cv2.VideoCapture(video_path)
+
+        zoom_scale = float(options.get("zoomScale", 1.03))
+
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            dx = shift_x[frame_idx]
+            dy = shift_y[frame_idx]
+
+            M = np.float32([
+                [zoom_scale, 0, -dx + (width * (1 - zoom_scale) / 2)],
+                [0, zoom_scale, -dy + (height * (1 - zoom_scale) / 2)]
+            ])
+
+            stabilized_frame = cv2.warpAffine(
+                frame, M, (width, height),
+                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT
+            )
+
+            process.stdin.write(stabilized_frame.tobytes())
+            frame_idx += 1
+
+        cap.release()
+        process.stdin.close()
+        process.wait()
+
+        print(f"[✅] AI Anchor Stabilization complete (multi-point, interpolated, no spikes): {output_vid}")
         return output_vid
-        
-    except subprocess.CalledProcessError as e:
-        err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
-        print(f"[❌] Stabilization failed: {err_msg}")
+
+    except Exception as e:
+        err_msg = str(e)
+        print(f"[❌] AI Anchor Stabilization failed: {err_msg}")
         # If it fails, return the original video path so the pipeline doesn't break
         return video_path
 
@@ -2949,10 +3609,72 @@ def run_pipeline(video_path: str, options_json: str) -> None:
         print("Please re-select the video in the UI.")
         return
 
+    if options.get("generatePromptOnly"):
+        print("\n[🎬] GENERATING SMART PROMPT...")
+        import subprocess
+        base_dir = os.path.dirname(os.path.abspath(video_path))
+        temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
+        subprocess.run(["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", temp_audio, "-y"], check=True, capture_output=True)
+        
+        try:
+            probe_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", temp_audio]
+            dur_out = subprocess.check_output(probe_cmd, text=True).strip()
+            audio_dur = float(dur_out)
+            duration_text = f"The total length of this audio is exactly {audio_dur:.2f} seconds. Your timestamps MUST NOT exceed this duration."
+        except Exception:
+            duration_text = "Pay close attention to the length of the audio."
+
+        prompt = f"""Listen to this audio. It is a mix of Sinhala and English (Singlish).
+Write down EXACTLY what is said, verbatim.
+
+IMPORTANT CONTEXT: {duration_text}
+
+CRITICAL RULES: 
+1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
+2. Break the text into short, logical phrases of exactly 3 to 5 words each.
+3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission" , "Grab Me"). 
+4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").
+5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්" , "වැඩ").
+6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
+7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.
+8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:
+   - THE HOOK: The very first attention-grabbing statement or question.
+   - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").
+   - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.
+   DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.
+
+You must provide the approximate start and end times for each phrase in seconds.
+Output strictly as a JSON array. Example:
+[
+  {{"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2}},
+  {{"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2}},
+  {{"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}}
+]
+Do not include any markdown formatting. Just the raw JSON array."""
+
+        print("[PROMPT_START]")
+        print(prompt)
+        print("[PROMPT_END]")
+        
+        if os.path.exists(temp_audio): os.remove(temp_audio)
+        return
+
     current_video = video_path
+
+    if options.get("mergeEngine"):
+        current_video = stage_merge_audio(current_video, options)
 
     if options.get("removeSilence"):
         current_video = stage_remove_silence(current_video, options)
+        
+    if options.get("stabilizerEngine"):
+        current_video = stage_fast_stabilize(current_video, options)
+    
+    if options.get("extractMp3"):
+        current_video = stage_mp4_to_mp3(current_video, options)
+ 
+    if options.get("blurBackground"):
+        current_video = stage_background_fx(current_video, options) 
 
     if options.get("cinematicColor"):
         current_video = stage_cinematic_color(current_video, options)
@@ -2960,8 +3682,12 @@ def run_pipeline(video_path: str, options_json: str) -> None:
     if options.get("cinematicGrade") and options.get("cinematicGrade") != "none":
         current_video = stage_cinematic_grade(current_video, options)
 
-    if options.get("startingHook") and options.get("startingHook") != "none":
-        current_video = stage_starting_hook(current_video, options)
+    if options.get("hookEngine"):
+        if options.get("startingHook") and options.get("startingHook") != "none":
+            current_video = stage_starting_hook(current_video, options)
+
+        if options.get("hookPrimaryText") or options.get("hookSecondaryText"):
+            current_video = stage_visual_hook(current_video, options)
 
     if options.get("aiBroll"):
         current_video = stage_ai_broll(current_video, options)
@@ -2970,13 +3696,7 @@ def run_pipeline(video_path: str, options_json: str) -> None:
         current_video = stage_studio_audio(current_video)
 
     if options.get("autoZoom"):
-        current_video = stage_semantic_zoom(current_video, options)
-
-     if options.get("stabilizeVideo"):
-        current_video = stage_fast_stabilize(current_video, options)    
-
-    if options.get("blurBackground"):
-        current_video = stage_background_fx(current_video, options)
+        current_video = stage_semantic_zoom(current_video, options)  
 
     if options.get("applyBeautyFilter"):
         current_video = stage_beauty_filter(current_video, options)
@@ -3000,9 +3720,6 @@ def run_pipeline(video_path: str, options_json: str) -> None:
             export_captions_overlay_si(current_video, options)
         else:
             export_captions_overlay_en(current_video, options)
-
-    if options.get("extractMp3"):
-        current_video = stage_mp4_to_mp3(current_video, options)
 
     print(f"\n[🚀] PIPELINE COMPLETE. Final output: {current_video}")
 
