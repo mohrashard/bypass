@@ -286,10 +286,10 @@ def stage_cinematic_color(video_path: str, color_options: dict) -> str:
         # 3. eq: Lifts the shadows slightly and boosts contrast to mimic Apple's Smart HDR.
         # 4. unsharp: Crisps up the edges after the upscale.
         filter_chain = (
-            "hqdn3d=4.0:3.0:6.0:4.5,"
+            "hqdn3d=3.0:2.0:4.0:3.0,"
             "eq=contrast=1.08:saturation=1.15:gamma=1.05,"
-            "unsharp=5:5:1.2:3:3:0.0,"
-            "scale='if(gt(iw,ih),3840,-2)':'if(gt(iw,ih),-2,3840)':flags=lanczos"
+            "unsharp=5:5:1.0:3:3:0.0,"
+            "scale='if(gt(iw,ih),1920,-2)':'if(gt(iw,ih),-2,1920)':flags=bicubic"
         )
     else:
         print("      ↳ Mode: iPhone Pro Max (Smart HDR)")
@@ -300,7 +300,7 @@ def stage_cinematic_color(video_path: str, color_options: dict) -> str:
         subprocess.run([
             "ffmpeg", "-i", video_path,
             "-vf", filter_chain,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "16",
+            "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18", "-b:v", "0",
             "-pix_fmt", "yuv420p", "-c:a", "copy",
             output_vid, "-y"
         ], check=True, capture_output=True)
@@ -1726,46 +1726,96 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
         out.release()
         if os.path.exists(temp_vid): os.remove(temp_vid)
 
-        # Advanced FFmpeg Chroma Key Math
-        # chromakey=color:similarity:blend
-        # We use pure green (0x00FF00) with a balanced similarity (0.18) to eat up the shadows 
-        # (the 'fog'), and a tight blend (0.04) to keep edges sharp. despill=green kills any remaining glow.
-        # We use the exact hex color of the dark green screen (0x18742B) with an optimized similarity (0.08) and increased blend (0.06) to soften the harsh grey spill outlines around the subject's edges.
-        chroma_filter = "chromakey=0x1A9535:0.11:0.02,despill=green"
+        # Handle Timeline Scenes & Sandwich Text
+        timeline_scenes = bg_options.get("timelineScenes", [])
+        if not timeline_scenes:
+            timeline_scenes = [{
+                "timestamp": 0.0,
+                "bgImagePath": bg_image_path if mode == "image" else "",
+                "bgScale": bg_scale,
+                "subjectScale": sub_scale,
+                "subjectY": sub_y,
+                "textBehind": bg_options.get("textBehind", ""),
+                "textY": bg_options.get("textY", 50),
+                "textSize": bg_options.get("textSize", 100),
+            }]
 
-        
-        # Calculate subject scaling precisely to keep FFmpeg happy (even numbers)
-        sub_w = int(w * sub_scale / 100)
-        sub_h = int(h * sub_scale / 100)
-        sub_w = sub_w if sub_w % 2 == 0 else sub_w + 1
-        sub_h = sub_h if sub_h % 2 == 0 else sub_h + 1
-        
-        # Subject isolation and scaling filter
-        fg_filter = f"[0:v]{chroma_filter}[fg];[fg]scale={sub_w}:{sub_h}[fg_scaled]"
-        
-        # Overlay positioning (Center horizontally, lock to bottom vertically with Y offset)
-        # We explicitly force yuv420p at the end so standard players don't render the PNG background as black!
-        y_offset = f"+(H*{sub_y}/100)" if sub_y != 0 else ""
-        overlay_cmd = f"overlay=(W-w)/2:H-h{y_offset}:shortest=1,format=yuv420p"
-        
-        audio_idx = 1
-        if mode == "blur":
-            filter_complex = f"[0:v]boxblur=25:25,colorchannelmixer=rr=0.7:gg=0.7:bb=0.7[bg];{fg_filter};[bg][fg_scaled]{overlay_cmd}[outv]"
-            inputs = ["-i", video_path]
-        elif mode == "image" and bg_image_path and os.path.exists(bg_image_path):
-            bg_w = int(w * (bg_scale / 100.0))
-            bg_h = int(h * (bg_scale / 100.0))
-            filter_complex = f"[1:v]scale={bg_w}:{bg_h}:force_original_aspect_ratio=increase,crop={w}:{h}[bg];{fg_filter};[bg][fg_scaled]{overlay_cmd}[outv]"
-            inputs = ["-i", video_path, "-loop", "1", "-i", bg_image_path]
-            audio_idx = 2
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True
+        )
+        try:
+            video_duration = float(probe.stdout.strip())
+        except:
+            video_duration = 9999.0
+
+        inputs = ["-i", video_path]
+        num_inputs = 1
+        filter_complex = ""
+        bg_streams = []
+
+        for i, scene in enumerate(timeline_scenes):
+            start_t = float(scene.get("timestamp", 0))
+            end_t = float(timeline_scenes[i+1].get("timestamp")) if i+1 < len(timeline_scenes) else video_duration
+            dur = end_t - start_t
+            if dur <= 0: continue
+
+            # 1. Background Source
+            scene_bg_img = scene.get("bgImagePath", "")
+            if scene_bg_img and os.path.exists(scene_bg_img):
+                inputs.extend(["-loop", "1", "-i", scene_bg_img])
+                idx = num_inputs
+                num_inputs += 1
+                scene_bg_scale = int(scene.get("bgScale", 100))
+                bg_w = int(w * (scene_bg_scale / 100.0))
+                bg_h = int(h * (scene_bg_scale / 100.0))
+                filter_complex += f"[{idx}:v]trim=duration={dur},scale={bg_w}:{bg_h}:force_original_aspect_ratio=increase,crop={w}:{h},setpts=PTS-STARTPTS[bg_raw{i}];"
+            else:
+                scene_hex = hex_color if len(hex_color) == 6 else "09090b"
+                filter_complex += f"color=c=#{scene_hex}:s={w}x{h}:d={dur}[bg_raw{i}];"
+
+            # 2. Sandwich Text
+            text = scene.get("textBehind", "").strip()
+            if text:
+                text_y = int(scene.get("textY", 50))
+                text_size = int(scene.get("textSize", 100))
+                fs = int(text_size * 1.5)
+                # Escape single quotes and colons for FFmpeg
+                esc_text = text.replace("'", "\\\'").replace(":", "\\:")
+                text_cmd = f"drawtext=text='{esc_text}':fontcolor=white:fontsize={fs}:x=(w-text_w)/2:y=(h-text_h)*{text_y}/100"
+                filter_complex += f"[bg_raw{i}]{text_cmd}[bg{i}];"
+            else:
+                filter_complex += f"[bg_raw{i}]copy[bg{i}];"
+
+            bg_streams.append(f"[bg{i}]")
+
+            # 3. Subject Overlay
+            scene_sub_scale = int(scene.get("subjectScale", 100))
+            scene_sub_y = int(scene.get("subjectY", 0))
+            sub_w = int(w * scene_sub_scale / 100)
+            sub_h = int(h * scene_sub_scale / 100)
+            sub_w = sub_w if sub_w % 2 == 0 else sub_w + 1
+            sub_h = sub_h if sub_h % 2 == 0 else sub_h + 1
+            y_offset = f"+(H*{scene_sub_y}/100)" if scene_sub_y != 0 else ""
+
+            chroma_filter = "chromakey=0x1A9535:0.11:0.02,despill=green"
+            
+            filter_complex += f"[0:v]trim=start={start_t}:duration={dur},setpts=PTS-STARTPTS,{chroma_filter},scale={sub_w}:{sub_h}[fg{i}];"
+            filter_complex += f"{bg_streams[-1]}[fg{i}]overlay=(W-w)/2:H-h{y_offset}:shortest=1[seg{i}];"
+
+        # Concat all segments
+        concat_inputs = "".join([f"[seg{i}]" for i in range(len(timeline_scenes))])
+        if len(timeline_scenes) > 1:
+            filter_complex += f"{concat_inputs}concat=n={len(timeline_scenes)}:v=1:a=0,format=yuv420p[outv]"
         else:
-            ff_color = hex_color if len(hex_color) == 6 else "09090b"
-            filter_complex = f"color=c=#{ff_color}:s={w}x{h}:d=9999[bg];{fg_filter};[bg][fg_scaled]{overlay_cmd}[outv]"
-            inputs = ["-i", video_path]
+            filter_complex += f"{concat_inputs}format=yuv420p[outv]"
 
-        print("[⚙️] Running ultra-fast FFmpeg render pipeline...")
+        audio_idx = num_inputs
+        inputs.extend(["-i", temp_audio])
+
+        print("[⚙️] Running ultra-fast FFmpeg render pipeline (Multi-Scene + Sandwich)...")
         cmd = [
-            "ffmpeg", *inputs, "-i", temp_audio,
+            "ffmpeg", *inputs,
             "-filter_complex", filter_complex,
             "-map", "[outv]", "-map", f"{audio_idx}:a?",
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
@@ -3530,23 +3580,39 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
         trajectory_y = median_filter(trajectory_y, size=median_k, mode="nearest")
 
         print("[⚙️] Pass 3: Applying low-pass filter to isolate real (slow) motion...")
+        is_motion_tracking = options.get("motionTracking", False)
+        
         sigma_val = float(options.get("vibrationFilterStrength", 8.0))
+        if is_motion_tracking:
+            sigma_val *= 4.0  # High-lag spring physics
+            
         smoothed_x = gaussian_filter1d(trajectory_x, sigma=sigma_val, mode="nearest")
         smoothed_y = gaussian_filter1d(trajectory_y, sigma=sigma_val, mode="nearest")
 
-        shift_x = trajectory_x - smoothed_x
-        shift_y = trajectory_y - smoothed_y
-
-        print("[⚙️] Pass 3b: Clamping correction magnitude...")
-        # If a correction is asking for a huge shift, it's not "shake" -
-        # it's either a genuine fast head movement or a leftover detection
-        # glitch. Either way, over-correcting it is what produces the
-        # "too much shake" feeling. Clamp + soft-taper instead of hard cut,
-        # so we don't introduce a new discontinuity.
-        max_shift_px = float(options.get("maxCorrectionPx", 12.0))
-        shift_x = _soft_clip(shift_x, max_shift_px)
-        shift_y = _soft_clip(shift_y, max_shift_px)
-
+        is_motion_tracking = options.get("motionTracking", False)
+        
+        if is_motion_tracking:
+            print("[⚙️] Pass 3b: Calculating dynamic motion tracking trajectory...")
+            # For motion tracking, camera chases the smoothed face
+            initial_x = np.nanmedian(trajectory_x[:30]) if len(trajectory_x) > 30 else trajectory_x[0]
+            initial_y = np.nanmedian(trajectory_y[:30]) if len(trajectory_y) > 30 else trajectory_y[0]
+            
+            shift_x = smoothed_x - initial_x
+            shift_y = smoothed_y - initial_y
+            
+            # Allow larger shifts, but clamp smoothly
+            max_shift_px = float(width * 0.08) # 8% of width
+            shift_x = _soft_clip(shift_x, max_shift_px)
+            shift_y = _soft_clip(shift_y, max_shift_px)
+        else:
+            print("[⚙️] Pass 3b: Clamping correction magnitude...")
+            shift_x = trajectory_x - smoothed_x
+            shift_y = trajectory_y - smoothed_y
+            
+            max_shift_px = float(options.get("maxCorrectionPx", 12.0))
+            shift_x = _soft_clip(shift_x, max_shift_px)
+            shift_y = _soft_clip(shift_y, max_shift_px)
+        
         print("[⚙️] Pass 4: Rendering smooth frames via FFmpeg pipe...")
         cmd = [
             "ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -3559,7 +3625,7 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cap = cv2.VideoCapture(video_path)
 
-        zoom_scale = float(options.get("zoomScale", 1.03))
+        zoom_scale = 1.12 if is_motion_tracking else float(options.get("zoomScale", 1.03))
 
         frame_idx = 0
         while True:
@@ -3569,6 +3635,12 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
 
             dx = shift_x[frame_idx]
             dy = shift_y[frame_idx]
+
+            if is_motion_tracking:
+                sway_x = np.sin(frame_idx * 0.04) * (width * 0.015)
+                sway_y = np.cos(frame_idx * 0.033) * (height * 0.015)
+                dx += sway_x
+                dy += sway_y
 
             M = np.float32([
                 [zoom_scale, 0, -dx + (width * (1 - zoom_scale) / 2)],
@@ -3597,63 +3669,80 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
         return video_path
 
 # ─────────────────────────────────────────────
-# ─────────────────────────────────────────────
-# AI IMAGE ENHANCER & INVISIBLE WATERMARK REMOVER
-# ─────────────────────────────────────────────
+# ────────────────�    current_video = video_path
 
-def stage_enhance_ai_image(input_image_path: str) -> str:
-    from playwright.sync_api import sync_playwright
-    print(f"[⚙️] Bypassing Invisible AI Watermarks via High-Res Screenshot: {input_image_path}")
-    base, ext = os.path.splitext(input_image_path)
-    output_image_path = f"{base}_hq.jpg"
+    # 1. Fast Stabilize
+    if options.get("stabilizerEngine") or options.get("motionTracking"):
+        current_video = stage_fast_stabilize(current_video, options)
 
-    try:
-        # 1. Get original image dimensions
-        img = Image.open(input_image_path)
-        w, h = img.size
-        img.close()
+    # 2. Audio Merge
+    if options.get("mergeEngine"):
+        current_video = stage_merge_audio(current_video, options)
 
-        # 2. Automate a headless browser to "screenshot" the image.
-        # The browser's compositing and upscaling completely destroys 
-        # fragile steganographic watermarks (like SynthID).
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--disable-web-security", "--allow-file-access-from-files"]
-            )
-            
-            # device_scale_factor=2 upscales the screenshot by 2x for high quality
-            context = browser.new_context(
-                viewport={"width": w, "height": h},
-                device_scale_factor=2 
-            )
-            page = context.new_page()
-            
-            # We slightly overscale (101%) to force sub-pixel resampling.
-            # This guarantees the invisible pixel noise patterns are irreversibly scrambled.
-            html_content = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-                    body, html {{ width: {w}px; height: {h}px; overflow: hidden; background: #000; }}
-                    img {{ 
-                        width: 101%; 
-                        height: 101%; 
-                        object-fit: cover; 
-                        transform: translate(-0.5%, -0.5%); 
-                    }}
-                </style>
-            </head>
-            <body>
-                <img src="file:///{input_image_path.replace(os.sep, '/')}" />
-            </body>
-            </html>
-            """
-            
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8") as tmp:
+    # 3. Dead Air Removal (Chopper)
+    if options.get("removeSilence"):
+        current_video = stage_remove_silence(current_video, options)
+        
+    # 4. Background FX & Sandwich Compositing
+    if options.get("blurBackground"):
+        bg_video = stage_dynamic_background_fx(current_video, options)
+        current_video = stage_composite_sandwich(current_video, bg_video, options)
+
+    # 5. Semantic Smart Zoom
+    if options.get("autoZoom"):
+        current_video = stage_semantic_zoom(current_video, options)  
+
+    # 6. Algorithmic Color Grade
+    if options.get("cinematicColor"):
+        current_video = stage_cinematic_color(current_video, options)
+
+    if options.get("cinematicGrade") and options.get("cinematicGrade") != "none":
+        current_video = stage_cinematic_grade(current_video, options)
+
+    # 7. Cinematic Bottom Glow
+    if options.get("bottomGlow"):
+        color = options.get("glowColor", "#000000")
+        current_video = stage_bottom_glow(current_video, color)
+
+    # 8. Visual Hooks & Text Interrupts
+    if options.get("hookEngine"):
+        if options.get("startingHook") and options.get("startingHook") != "none":
+            current_video = stage_starting_hook(current_video, options)
+
+        if options.get("hookPrimaryText") or options.get("hookSecondaryText"):
+            current_video = stage_visual_hook(current_video, options)
+
+    # 9. AI B-Roll
+    if options.get("aiBroll"):
+        current_video = stage_ai_broll(current_video, options)
+
+    # 10. Studio Audio & MP3 Extract
+    if options.get("studioAudio"):
+        current_video = stage_studio_audio(current_video)
+        
+    if options.get("extractMp3"):
+        current_video = stage_mp4_to_mp3(current_video, options)
+
+    # 11. Beauty Filter
+    if options.get("applyBeautyFilter"):
+        current_video = stage_beauty_filter(current_video, options)
+
+    # 12. Captions & Overlays
+    if options.get("burnCaptions"):
+        if options.get("captionLanguage") == "si":
+            current_video = stage_burn_sinhala_captions(current_video, options)
+        else:
+            current_video = stage_burn_captions(current_video, options)
+
+    if options.get("autoTransitions"):
+        current_video = stage_hardcode_flash(current_video, options)
+
+    if options.get("exportCaptionOverlay"):
+        lang = options.get("captionLanguage", "en")
+        if lang == "si":
+            export_captions_overlay_si(current_video, options)
+        else:
+            export_captions_overlay_en(current_video, options)NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8") as tmp:
                 tmp.write(html_content)
                 tmp_path = tmp.name
 
@@ -3749,9 +3838,6 @@ Do not include any markdown formatting. Just the raw JSON array."""
     if options.get("removeSilence"):
         current_video = stage_remove_silence(current_video, options)
         
-    if options.get("stabilizerEngine"):
-        current_video = stage_fast_stabilize(current_video, options)
-    
     if options.get("extractMp3"):
         current_video = stage_mp4_to_mp3(current_video, options)
  
@@ -3795,6 +3881,9 @@ Do not include any markdown formatting. Just the raw JSON array."""
 
     if options.get("autoTransitions"):
         current_video = stage_hardcode_flash(current_video, options)
+
+    if options.get("stabilizerEngine") or options.get("motionTracking"):
+        current_video = stage_fast_stabilize(current_video, options)
 
     if options.get("exportCaptionOverlay"):
         lang = options.get("captionLanguage", "en")

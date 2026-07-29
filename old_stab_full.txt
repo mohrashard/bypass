@@ -1,0 +1,216 @@
+def stage_fast_stabilize(video_path: str, options: dict) -> str:
+    import os
+    import subprocess
+    import cv2
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d, median_filter
+    import urllib.request
+
+    engine_backend = options.get('stabilizerBackend', 'cpu')
+    if engine_backend == 'gpu':
+        print("[ΓÜÖ∩╕Å] Booting AI Facial Anchor Stabilizer (PyTorch GPU Mode) v2...")
+    else:
+        print("[ΓÜÖ∩╕Å] Booting AI Facial Anchor Stabilizer (Micro-Shock Absorber CPU) v2...")
+
+    base_dir = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_stabilized.mp4"
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+
+    try:
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        print(f"[ΓÜÖ∩╕Å] Pass 1: Extracting rigid facial trajectory (multi-point anchor using {engine_backend.upper()})...")
+        raw_x, raw_y = [], []
+        valid_frames = []
+
+        if engine_backend == 'gpu':
+            try:
+                from facenet_pytorch import MTCNN
+                import torch
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                # MTCNN takes RGB images
+                mtcnn = MTCNN(keep_all=False, device=device)
+                
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    # MTCNN runs very fast on GPU even without downscaling, but we downscale slightly just in case
+                    process_w = 640
+                    scale_ratio = process_w / width
+                    process_h = int(height * scale_ratio)
+                    small_frame = cv2.resize(frame, (process_w, process_h), interpolation=cv2.INTER_LINEAR)
+                    rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                    
+                    boxes, probs, landmarks = mtcnn.detect(rgb_frame, landmarks=True)
+                    if landmarks is not None and len(landmarks) > 0:
+                        # landmarks[0] contains 5 points: left eye, right eye, nose, left mouth, right mouth
+                        lm = landmarks[0] 
+                        xs = [p[0] / scale_ratio for p in lm]
+                        ys = [p[1] / scale_ratio for p in lm]
+                        raw_x.append(float(np.mean(xs)))
+                        raw_y.append(float(np.mean(ys)))
+                        valid_frames.append(True)
+                    else:
+                        raw_x.append(np.nan)
+                        raw_y.append(np.nan)
+                        valid_frames.append(False)
+            except ImportError:
+                print("[ΓÜá∩╕Å] facenet-pytorch not installed! Falling back to CPU...")
+                engine_backend = 'cpu' # Fallthrough to CPU below...
+                
+        if engine_backend == 'cpu':
+            import mediapipe as mp
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision
+            
+            # ΓöÇΓöÇΓöÇ Load MediaPipe Face Landmarker ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            model_path = os.path.join(engine_dir, "pretrained_models", "face_landmarker.task")
+            if not os.path.exists(model_path):
+                print("[ΓÜÖ∩╕Å] Downloading MediaPipe Face Landmarker model...")
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                try:
+                    urllib.request.urlretrieve(
+                        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+                        model_path
+                    )
+                except Exception as e:
+                    print(f"[ΓÜá∩╕Å] Failed to download model: {e}. Using original video.")
+                    return video_path
+                    
+            base_options = mp_python.BaseOptions(model_asset_path=model_path)
+            task_options = vision.FaceLandmarkerOptions(
+                base_options=base_options,
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False,
+                num_faces=1
+            )
+            ANCHOR_IDS = [4, 6, 168, 133, 362]
+            with vision.FaceLandmarker.create_from_options(task_options) as landmarker:
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    # ≡ƒöÑ DOWN-SCALE FOR 10X FASTER CPU INFERENCE
+                    process_w = 480
+                    scale_ratio = process_w / width
+                    process_h = int(height * scale_ratio)
+                    
+                    small_frame = cv2.resize(frame, (process_w, process_h), interpolation=cv2.INTER_LINEAR)
+                    rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                    
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                    detection = landmarker.detect(mp_image)
+
+                    if detection.face_landmarks:
+                        lm = detection.face_landmarks[0]
+                        xs = [lm[i].x * width for i in ANCHOR_IDS]
+                        ys = [lm[i].y * height for i in ANCHOR_IDS]
+                        raw_x.append(float(np.mean(xs)))
+                        raw_y.append(float(np.mean(ys)))
+                        valid_frames.append(True)
+                    else:
+                        raw_x.append(np.nan)
+                        raw_y.append(np.nan)
+                        valid_frames.append(False)
+
+        cap.release()
+
+        if not any(valid_frames):
+            print("[ΓÜá∩╕Å] No face detected. Cannot anchor-stabilize. Falling back to original.")
+            return video_path
+
+        trajectory_x = np.array(raw_x, dtype=np.float64)
+        trajectory_y = np.array(raw_y, dtype=np.float64)
+
+        print("[ΓÜÖ∩╕Å] Pass 1b: Interpolating dropped-detection gaps...")
+        trajectory_x = _interpolate_nans(trajectory_x)
+        trajectory_y = _interpolate_nans(trajectory_y)
+
+        print("[ΓÜÖ∩╕Å] Pass 2: Median pre-filter to strip outlier spikes...")
+        # A short median filter removes single/double-frame outliers (blinks,
+        # partial occlusion, brief misdetection) WITHOUT smearing real motion,
+        # unlike the gaussian which just blends outliers into the trajectory.
+        median_k = int(options.get("medianKernel", 5))
+        if median_k % 2 == 0:
+            median_k += 1
+        trajectory_x = median_filter(trajectory_x, size=median_k, mode="nearest")
+        trajectory_y = median_filter(trajectory_y, size=median_k, mode="nearest")
+
+        print("[ΓÜÖ∩╕Å] Pass 3: Applying low-pass filter to isolate real (slow) motion...")
+        sigma_val = float(options.get("vibrationFilterStrength", 8.0))
+        smoothed_x = gaussian_filter1d(trajectory_x, sigma=sigma_val, mode="nearest")
+        smoothed_y = gaussian_filter1d(trajectory_y, sigma=sigma_val, mode="nearest")
+
+        shift_x = trajectory_x - smoothed_x
+        shift_y = trajectory_y - smoothed_y
+
+        print("[ΓÜÖ∩╕Å] Pass 3b: Clamping correction magnitude...")
+        # If a correction is asking for a huge shift, it's not "shake" -
+        # it's either a genuine fast head movement or a leftover detection
+        # glitch. Either way, over-correcting it is what produces the
+        # "too much shake" feeling. Clamp + soft-taper instead of hard cut,
+        # so we don't introduce a new discontinuity.
+        max_shift_px = float(options.get("maxCorrectionPx", 12.0))
+        shift_x = _soft_clip(shift_x, max_shift_px)
+        shift_y = _soft_clip(shift_y, max_shift_px)
+
+        print("[ΓÜÖ∩╕Å] Pass 4: Rendering smooth frames via FFmpeg pipe...")
+        cmd = [
+            "ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
+            "-s", f"{width}x{height}", "-pix_fmt", "bgr24", "-r", str(fps), "-i", "-",
+            "-i", video_path, "-map", "0:v:0", "-map", "1:a:0?",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-c:a", "copy", output_vid
+        ]
+
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cap = cv2.VideoCapture(video_path)
+
+        zoom_scale = float(options.get("zoomScale", 1.03))
+
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            dx = shift_x[frame_idx]
+            dy = shift_y[frame_idx]
+
+            M = np.float32([
+                [zoom_scale, 0, -dx + (width * (1 - zoom_scale) / 2)],
+                [0, zoom_scale, -dy + (height * (1 - zoom_scale) / 2)]
+            ])
+
+            stabilized_frame = cv2.warpAffine(
+                frame, M, (width, height),
+                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT
+            )
+
+            process.stdin.write(stabilized_frame.tobytes())
+            frame_idx += 1
+
+        cap.release()
+        process.stdin.close()
+        process.wait()
+
+        print(f"[Γ£à] AI Anchor Stabilization complete (multi-point, interpolated, no spikes): {output_vid}")
+        return output_vid
+
+    except Exception as e:
+        err_msg = str(e)
+        print(f"[Γ¥î] AI Anchor Stabilization failed: {err_msg}")
+        # If it fails, return the original video path so the pipeline doesn't break
+        return video_path
+
+# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# AI IMAGE ENHANCER & INVISIBLE WATERMARK REMOVER
+# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+

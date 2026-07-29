@@ -1,0 +1,1524 @@
+--- github
++++ latest
+@@ -10,7 +10,7 @@
+ load_dotenv(dotenv_path=env_path)
+ from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageChops
+ 
+-# ─── Windows Fix ─────────────────────────────
++# ΓöÇΓöÇΓöÇ Windows Fix ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ if os.name == 'nt':
+     pathlib.PosixPath = pathlib.WindowsPath
+     import importlib.util
+@@ -48,13 +48,13 @@
+     wet: float = 0.95,
+     atten_lim_db: float | None = None,
+ ) -> None:
+-    print("[⚙️] Initializing DeepFilterNet3...")
++    print("[ΓÜÖ∩╕Å] Initializing DeepFilterNet3...")
+     model, df_state, _ = init_df(post_filter=False)
+ 
+-    print("[⚙️] Loading audio at 48kHz full-band...")
++    print("[ΓÜÖ∩╕Å] Loading audio at 48kHz full-band...")
+     audio_df, sr_df = load_audio(input_wav_path, sr=df_state.sr())
+ 
+-    print("[⚙️] Running Studio Grade AI deep filtering...")
++    print("[ΓÜÖ∩╕Å] Running Studio Grade AI deep filtering...")
+     # atten_lim_db=None = no ceiling on suppression, i.e. DeepFilterNet can
+     # remove as much stationary noise (fan/AC/room tone) as it's able to.
+     # Only pass a number (e.g. 20) if voices start sounding underwater/artifacted.
+@@ -72,9 +72,9 @@
+ 
+     sr_orig = df_state.sr()
+ 
+-    print("[⚙️] Building pro signal chain (Pedalboard)...")
++    print("[ΓÜÖ∩╕Å] Building pro signal chain (Pedalboard)...")
+     board = Pedalboard([
+-        # highpass FIRST — strips sub-bass rumble/mains hum before the gate
++        # highpass FIRST ΓÇö strips sub-bass rumble/mains hum before the gate
+         # sees it, so low-freq fan drone can't hold the gate open in silence
+         HighpassFilter(cutoff_frequency_hz=90.0),
+         NoiseGate(threshold_db=-50.0, ratio=15.0, attack_ms=2.0, release_ms=200.0),
+@@ -83,12 +83,12 @@
+         Limiter(threshold_db=-1.0, release_ms=50.0),
+     ])
+ 
+-    print("[⚙️] Processing through pro signal chain...")
++    print("[ΓÜÖ∩╕Å] Processing through pro signal chain...")
+     processed = board(audio_np, sr_orig)
+ 
+-    print("[⚙️] Applying voice EQ and -14 LUFS Broadcast Normalization...")
++    print("[ΓÜÖ∩╕Å] Applying voice EQ and -14 LUFS Broadcast Normalization...")
+     tmp_pre_eq = input_wav_path.replace(".wav", "_pre_eq.wav")
+-    # FLOAT not PCM_16 — loudnorm still applies gain after this write
++    # FLOAT not PCM_16 ΓÇö loudnorm still applies gain after this write
+     sf.write(tmp_pre_eq, processed.T, sr_orig, subtype='FLOAT')
+ 
+     eq_filter = (
+@@ -110,24 +110,24 @@
+             text=True,
+         )
+     except subprocess.CalledProcessError as e:
+-        print("[❌] ffmpeg failed:\n", e.stderr)
++        print("[Γ¥î] ffmpeg failed:\n", e.stderr)
+         raise
+     finally:
+         if os.path.exists(tmp_pre_eq):
+             os.remove(tmp_pre_eq)
+ 
+-    print("[✅] Done — broadcast-quality voice audio.")
+-
+-
+-# ─────────────────────────────────────────────
++    print("[Γ£à] Done ΓÇö broadcast-quality voice audio.")
++
++
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 2. THE SILENCE CHOPPER
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_remove_silence(video_path: str, options: dict = None) -> str:
+     from pydub import AudioSegment
+     from pydub.silence import detect_nonsilent
+ 
+-    print("[⚙️] Analyzing waveforms for cinematic algorithmic cuts...")
++    print("[ΓÜÖ∩╕Å] Analyzing waveforms for cinematic algorithmic cuts...")
+     base_dir = os.path.dirname(os.path.abspath(video_path))
+     temp_wav = os.path.join(base_dir, "_silence_detect.wav")
+     output_vid = os.path.splitext(video_path)[0] + "_chopped.mp4"
+@@ -145,7 +145,7 @@
+         if os.path.exists(temp_wav): os.remove(temp_wav)
+         return video_path
+ 
+-    print(f"[🎬] Found {len(nonsilent_chunks)} active segments. Generating V-Fades & Camera Angles...")
++    print(f"[≡ƒÄ¼] Found {len(nonsilent_chunks)} active segments. Generating V-Fades & Camera Angles...")
+ 
+     probe = subprocess.run(
+         ["ffprobe", "-v", "error", "-select_streams", "v:0",
+@@ -195,7 +195,7 @@
+     with open(script_path, "w", encoding="utf-8") as f:
+         f.write("\n".join(filter_lines))
+ 
+-    print("[⚙️] Rendering master timeline via filter_complex script...")
++    print("[ΓÜÖ∩╕Å] Rendering master timeline via filter_complex script...")
+     subprocess.run([
+         "ffmpeg", "-i", video_path,
+         "-filter_complex_script", script_path,
+@@ -208,13 +208,13 @@
+     for f in [temp_wav, script_path]:
+         if os.path.exists(f): os.remove(f)
+ 
+-    print(f"[✅] Cinematic Jump Cuts applied: {output_vid}")
++    print(f"[Γ£à] Cinematic Jump Cuts applied: {output_vid}")
+     return output_vid
+ 
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 3. PIPELINE ORCHESTRATION HELPERS
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def extract_audio(video_path: str, out_path: str) -> None:
+     subprocess.run(
+@@ -238,12 +238,12 @@
+     output   = os.path.splitext(video_path)[0] + "_studio.mp4"
+ 
+     try:
+-        print("[⚙️] Extracting audio...")
++        print("[ΓÜÖ∩╕Å] Extracting audio...")
+         extract_audio(video_path, temp_raw)
+         process_with_ai_stack(temp_raw, temp_ai)
+-        print("[⚙️] Muxing enhanced audio back to video...")
++        print("[ΓÜÖ∩╕Å] Muxing enhanced audio back to video...")
+         mux_audio(video_path, temp_ai, output)
+-        print(f"[✅] Saved: {output}")
++        print(f"[Γ£à] Saved: {output}")
+         return output
+     finally:
+         for f in (temp_raw, temp_ai):
+@@ -252,33 +252,33 @@
+ 
+ 
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 4. PRO MAX CINEMATIC COLOR ENGINE (UPDATED)
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_cinematic_color(video_path: str, color_options: dict) -> str:
+-    print("[⚙️] Applying Algorithmic Color Grade...")
++    print("[ΓÜÖ∩╕Å] Applying Algorithmic Color Grade...")
+     base_dir = os.path.dirname(os.path.abspath(video_path))
+     output_vid = os.path.splitext(video_path)[0] + "_graded.mp4"
+     grade_style = color_options.get("colorGradeStyle", "pro-max")
+ 
+     if grade_style == "neon-blue":
+-        print("      ↳ Mode: Neon Blue Studio (Ambient Bounce Simulation)")
++        print("      Γå│ Mode: Neon Blue Studio (Ambient Bounce Simulation)")
+         filter_chain = "colorbalance=rs=-0.15:gs=-0.05:bs=0.25:rm=-0.05:bm=0.10,eq=contrast=1.12:saturation=1.10:gamma=0.86,unsharp=5:5:0.8:3:3:0.0"
+     elif grade_style == "cyber-warm":
+-        print("      ↳ Mode: Hollywood Teal & Orange")
++        print("      Γå│ Mode: Hollywood Teal & Orange")
+         filter_chain = "colorbalance=rs=0.15:bs=-0.15:rm=0.10:bm=-0.10:rh=0.05:bh=-0.05,eq=contrast=1.10:saturation=1.20:gamma=0.90,unsharp=5:5:0.8:3:3:0.0"
+     # --- NEW "POTH RAKKE GRADING" STYLE ---
+     elif grade_style == "poth-rakke":
+-        print("      ↳ Mode: Poth Rakke (Vibrant Tropical Yellow)")
++        print("      Γå│ Mode: Poth Rakke (Vibrant Tropical Yellow)")
+         # This pushes towards a bright, saturated look with a specific yellowish-orange wash.
+         filter_chain = "colorbalance=rs=0.10:gs=0.05:bs=-0.15:rm=0.10:bm=-0.15,eq=contrast=1.15:saturation=1.22:gamma=0.90,unsharp=5:5:0.8:3:3:0.0"
+     elif grade_style == "studio-blue":
+-        print("      ↳ Mode: Studio Blue Backdrop (Skin-Safe)")
++        print("      Γå│ Mode: Studio Blue Backdrop (Skin-Safe)")
+         # Cools the shadows/background while explicitly preserving/warming the midtones for skin-safe grading
+         filter_chain = "colorbalance=rs=0.0:gs=0.0:bs=0.15:rm=0.05:bm=0.0:bh=0.05,eq=contrast=1.10:saturation=1.12:gamma=0.95,unsharp=5:5:0.8:3:3:0.0"
+     elif grade_style == "m22-to-iphone-4k":
+-        print("      ↳ Mode: M22 Rescue (Denoise + Smart 4K Upscale + Smart HDR)")
++        print("      Γå│ Mode: M22 Rescue (Denoise + Smart 4K Upscale + Smart HDR)")
+         # 1. hqdn3d: Kills the nasty budget-sensor grain.
+         # 2. scale: Dynamically checks if video is vertical or horizontal. 
+         #    - If horizontal (iw>ih): Sets width to 3840, auto-calculates height (-2 keeps it even).
+@@ -292,7 +292,7 @@
+             "scale='if(gt(iw,ih),3840,-2)':'if(gt(iw,ih),-2,3840)':flags=lanczos"
+         )
+     else:
+-        print("      ↳ Mode: iPhone Pro Max (Smart HDR)")
++        print("      Γå│ Mode: iPhone Pro Max (Smart HDR)")
+         # Gamma > 1 lifts shadows (Smart HDR effect), preventing dark hair from crushing into the background
+         filter_chain = "eq=contrast=1.05:saturation=1.15:gamma=1.10,unsharp=5:5:0.8:3:3:0.0"
+ 
+@@ -304,17 +304,17 @@
+             "-pix_fmt", "yuv420p", "-c:a", "copy",
+             output_vid, "-y"
+         ], check=True, capture_output=True)
+-        print(f"[✅] Cinematic aesthetic baked in: {output_vid}")
++        print(f"[Γ£à] Cinematic aesthetic baked in: {output_vid}")
+         return output_vid
+     except subprocess.CalledProcessError as e:
+         err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+-        print(f"[❌] Color grading failed: {err_msg}")
++        print(f"[Γ¥î] Color grading failed: {err_msg}")
+         return video_path
+ 
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 5. WHISPER CAPTION ENGINE (English)
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ import os
+ import json
+ import subprocess
+@@ -339,7 +339,7 @@
+     word_events = []
+     
+     if is_manual:
+-        print("[⚙️] Parsing Manual Subtitles (Word-Level and Standard SRT)...")
++        print("[ΓÜÖ∩╕Å] Parsing Manual Subtitles (Word-Level and Standard SRT)...")
+         srt_text = cap_options.get("manualSrtText", "")
+         lines = srt_text.strip().split('\n')
+         current_segment_start = 0.0
+@@ -410,7 +410,7 @@
+             else:
+                 word_events[i]["end"] = max(word_events[i]["start"] + 0.5, word_events[i]["end"])
+     else:
+-        print("[⚙️] Loading Whisper model...")
++        print("[ΓÜÖ∩╕Å] Loading Whisper model...")
+         model = whisper.load_model("large")
+         temp_audio = os.path.join(base_dir, "_whisper_audio.wav")
+         subprocess.run(
+@@ -418,7 +418,7 @@
+              "-ar", "16000", "-ac", "1", temp_audio, "-y"],
+             check=True, capture_output=True
+         )
+-        print("[⚙️] Transcribing with Whisper...")
++        print("[ΓÜÖ∩╕Å] Transcribing with Whisper...")
+         result = model.transcribe(temp_audio, word_timestamps=True, verbose=False)
+     
+         for seg in result.get("segments", []):
+@@ -435,7 +435,7 @@
+         hook_dur = float(cap_options.get("hookDuration", 1.5))
+         word_events = [w for w in word_events if w["start"] >= hook_dur]
+ 
+-    # 🚀 UPGRADED: Much larger chunks (up to 6 words) to build multi-line blocks
++    # ≡ƒÜÇ UPGRADED: Much larger chunks (up to 6 words) to build multi-line blocks
+     phrases = []
+     current_phrase = []
+     char_count = 0
+@@ -462,7 +462,7 @@
+     W, H = int(info["width"]), int(info["height"])
+ 
+     def make_base_html(width: int, height: int) -> str:
+-        # 🚀 UPGRADED CSS: Centers the block, but Left-Aligns the text inside!
++        # ≡ƒÜÇ UPGRADED CSS: Centers the block, but Left-Aligns the text inside!
+         return f"""<!DOCTYPE html>
+ <html>
+ <head>
+@@ -508,7 +508,7 @@
+ </body>
+ </html>"""
+ 
+-    print("[⚙️] Launching headless Chrome for dynamic staggered rendering...")
++    print("[ΓÜÖ∩╕Å] Launching headless Chrome for dynamic staggered rendering...")
+ 
+     segments = []
+     rendered_pairs = {}
+@@ -539,7 +539,7 @@
+ 
+         rendered_done = set()
+         
+-        # ── DYNAMIC SVG ICON LIBRARY ──
++        # ΓöÇΓöÇ DYNAMIC SVG ICON LIBRARY ΓöÇΓöÇ
+         svg_map = {
+             "instagram": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>',
+             "youtube": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:100%; height:100%;"><path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17"></path><path d="M10 15l5-3-5-3v6z"></path></svg>',
+@@ -569,7 +569,7 @@
+             key = (phrase_words, active_idx)
+             if key in rendered_done: continue
+             
+-            # 🚀 UPGRADED: Smart Row Line-Breaking Logic with Background SVGs
++            # ≡ƒÜÇ UPGRADED: Smart Row Line-Breaking Logic with Background SVGs
+             page.evaluate("""
+                 (args) => {
+                     const wrapEl = document.getElementById('wrap');
+@@ -723,7 +723,7 @@
+                         iconDiv.style.width = iconSize + 'px';
+                         iconDiv.style.height = iconSize + 'px';
+                         
+-                        // ✨ ICON ANIMATION LOGIC ✨
++                        // Γ£¿ ICON ANIMATION LOGIC Γ£¿
+                         // Glow brightly at full opacity when triggered, otherwise subtle background glow
+                         if (args.active_index === triggerIndex) {
+                             iconDiv.style.opacity = '1.0';
+@@ -753,7 +753,7 @@
+ 
+         browser.close()
+ 
+-    print("[⚙️] Compositing with cinematic motion math...")
++    print("[ΓÜÖ∩╕Å] Compositing with cinematic motion math...")
+ 
+     CHUNK      = 50
+     current_video = video_path
+@@ -832,13 +832,13 @@
+     if 'temp_audio' in locals() and os.path.exists(temp_audio):
+         os.remove(temp_audio)
+ 
+-    print(f"[✅] Perfect Kinetic staggered phrases burned with '{anim_style}' animation: {output_vid}")
++    print(f"[Γ£à] Perfect Kinetic staggered phrases burned with '{anim_style}' animation: {output_vid}")
+     return output_vid
+ 
+ 
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 6. SINHALA TRANSCRIPT via GEMINI
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def get_perfect_sinhala_transcript(audio_path: str, api_key_opt: str = None, whisper_words: list = None) -> list:
+     from google import genai
+@@ -864,10 +864,10 @@
+             keys_to_try.append((name, k))
+     
+     if not keys_to_try:
+-        print("[⚠️] No valid GEMINI_API_KEY found. Proceeding without forced alignment.")
++        print("[ΓÜá∩╕Å] No valid GEMINI_API_KEY found. Proceeding without forced alignment.")
+         return []
+     
+-    print(f"[⚙️] Will try {len(keys_to_try)} API key(s)...")
++    print(f"[ΓÜÖ∩╕Å] Will try {len(keys_to_try)} API key(s)...")
+ 
+     import subprocess
+     try:
+@@ -888,22 +888,22 @@
+     1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
+     2. Break the text into short, logical phrases of exactly 3 to 5 words each.
+     3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission" , "Grab Me"). 
+-    4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").
+-    5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්" , "වැඩ").
+-    6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
++    4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "α╢╗α╖öα╢┤α╖Æα╢║α╢╜α╖è 5000").
++    5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct α╖Çα╖Éα╢⌐α╢£α╢▒α╖èα╢▒", "α╢╢α╖Åα╖âα╖è" , "α╖Çα╖Éα╢⌐").
++    6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, α╢╢α╖Åα╖âα╖è.
+     7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.
+     8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:
+        - THE HOOK: The very first attention-grabbing statement or question.
+-       - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").
++       - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "α╢╜α╖£α╢Üα╖öα╢╕ scam α╢æα╢Üα╢Üα╖è |").
+        - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.
+        DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.
+     
+     You must provide the approximate start and end times for each phrase in seconds.
+     Output strictly as a JSON array. Example:
+     [
+-      {"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2},
+-      {"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2},
+-      {"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}
++      {"phrase": "α╢öα╢║α╖Åα╢£α╖Öα╢¡α╖è leak α╖Çα╖Öα╢▒α╖Çα╢» |", "start": 0.1, "end": 1.2},
++      {"phrase": "α╢öα╖Çα╖è α╢╕α╢é α╢╕α╖Ü α╢Üα╖Æα╢║α╢▒α╖èα╢▒α╖Ü", "start": 1.3, "end": 2.2},
++      {"phrase": "α╢╗α╖öα╢┤α╖Æα╢║α╢╜α╖è 5000α╢Üα╖è α╢▒α╖Æα╢Üα╢▒α╖èα╢╕ |", "start": 2.3, "end": 3.5}
+     ]
+     Do not include any markdown formatting. Just the raw JSON array.
+     """
+@@ -913,9 +913,9 @@
+     for m_idx, model_name in enumerate(models_to_try):
+         for attempt, (key_name, api_key) in enumerate(keys_to_try):
+             if m_idx > 0 or attempt > 0:
+-                print(f"\n[⚠️] Retrying with Model '{model_name}' and API Key '{key_name}' (Model {m_idx+1}/{len(models_to_try)}, Key {attempt+1}/{len(keys_to_try)})...")
++                print(f"\n[ΓÜá∩╕Å] Retrying with Model '{model_name}' and API Key '{key_name}' (Model {m_idx+1}/{len(models_to_try)}, Key {attempt+1}/{len(keys_to_try)})...")
+             
+-            print(f"[⚙️] Uploading audio to Gemini API using key '{key_name}'...")
++            print(f"[ΓÜÖ∩╕Å] Uploading audio to Gemini API using key '{key_name}'...")
+             
+             try:
+                 client = genai.Client(api_key=api_key)
+@@ -927,7 +927,7 @@
+                     print(".", end="", flush=True)
+                     time.sleep(2)
+                     audio_file = client.files.get(name=audio_file.name)
+-                print("\n[✅] Audio processed by Gemini.")
++                print("\n[Γ£à] Audio processed by Gemini.")
+         
+                 # 4. Generate content
+                 import threading
+@@ -940,7 +940,7 @@
+                         sys.stdout.flush()
+                         time.sleep(2)
+                         
+-                print(f"[⚙️] Generating 99% accurate transcript with {model_name} (this can take 20-60s)", end="")
++                print(f"[ΓÜÖ∩╕Å] Generating 99% accurate transcript with {model_name} (this can take 20-60s)", end="")
+                 t = threading.Thread(target=print_progress)
+                 t.start()
+                 
+@@ -963,19 +963,19 @@
+                 # Strip potential markdown formatting just in case
+                 clean_text = response.text.replace('```json', '').replace('```', '').strip()
+                 word_list = json.loads(clean_text)
+-                print(f"[✅] Successfully extracted {len(word_list)} phrases from Gemini.")
++                print(f"[Γ£à] Successfully extracted {len(word_list)} phrases from Gemini.")
+                 
+                 # --- NEW: PRINT EXACT GEMINI OUTPUT TO TERMINAL ---
+                 preview_text = " ".join([w.get("phrase", w.get("word", "")) for w in word_list])
+                 print("\n" + "="*50)
+-                print("[🔍] RAW GEMINI TEXT DUMP:")
++                print("[≡ƒöì] RAW GEMINI TEXT DUMP:")
+                 print(preview_text)
+                 print("="*50 + "\n")
+                 # --------------------------------------------------
+         
+                 return word_list
+             except Exception as e:
+-                print(f"[❌] Gemini API Error with model {model_name} and key {api_key[:6]}...: {e}")
++                print(f"[Γ¥î] Gemini API Error with model {model_name} and key {api_key[:6]}...: {e}")
+                 try:
+                     if 'audio_file' in locals() and hasattr(audio_file, 'name'):
+                         client.files.delete(name=audio_file.name)
+@@ -986,28 +986,28 @@
+                 if m_idx == len(models_to_try) - 1 and attempt == len(keys_to_try) - 1:
+                     return []
+  
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # DROP-IN REPLACEMENT: align_phrases_to_whisper + stage_burn_sinhala_captions
+ #
+ # THE PROBLEM (diagnosed):
+-#   Gemini's phrase timestamps are systematically EARLY — it fires the start
++#   Gemini's phrase timestamps are systematically EARLY ΓÇö it fires the start
+ #   timestamp the moment it "predicts" the phrase, not when the audio lands.
+ #   On Sinhala/mixed audio Whisper also hallucinates word boundaries during
+ #   silence, so snapping to "nearest word" just snaps to a ghost.
+ #
+ # THE 3-LAYER FIX:
+-#   Layer 1 — Global drift correction
+-#             Sample N Gemini↔Whisper pairs and compute the median offset.
++#   Layer 1 ΓÇö Global drift correction
++#             Sample N GeminiΓåöWhisper pairs and compute the median offset.
+ #             Shift ALL Gemini timestamps by that amount before any snapping.
+-#   Layer 2 — Segment-anchored snapping (not word-anchored)
++#   Layer 2 ΓÇö Segment-anchored snapping (not word-anchored)
+ #             Use Whisper's rock-solid SEGMENT boundaries as anchors.
+ #             Find the segment whose [start, end] window best contains the
+ #             drift-corrected phrase start. This is immune to word-level noise.
+-#   Layer 3 — Gap-fill smoothing
++#   Layer 3 ΓÇö Gap-fill smoothing
+ #             After all phrases are placed, fill any dead gap between
+ #             phrase[i].end and phrase[i+1].start so the caption holds
+ #             on screen until the next word begins (no flicker, no early exit).
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def align_phrases_to_whisper(gemini_phrases: list, whisper_words: list, from_manual: bool = False) -> list:
+     """
+@@ -1020,9 +1020,9 @@
+     if not phrases:
+         return []
+ 
+-    # ── MANUAL JSON PATH: Trust the timestamps, just smooth the gaps ──────────
++    # ΓöÇΓöÇ MANUAL JSON PATH: Trust the timestamps, just smooth the gaps ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     if from_manual or not whisper_words:
+-        print("[⚙️] Manual JSON mode: trusting timestamps, applying gap-fill only...")
++        print("[ΓÜÖ∩╕Å] Manual JSON mode: trusting timestamps, applying gap-fill only...")
+         aligned = []
+         MIN_DUR = 0.40
+ 
+@@ -1046,10 +1046,10 @@
+             if 0 < gap <= 0.80:
+                 aligned[i]["end"] += gap * 0.85
+ 
+-        print(f"[✅] Manual alignment: {len(aligned)} phrases passed through with gap-fill.")
++        print(f"[Γ£à] Manual alignment: {len(aligned)} phrases passed through with gap-fill.")
+         return aligned
+ 
+-    # ── AUTO GEMINI PATH: Full Elastic Projection ─────────────────────────────
++    # ΓöÇΓöÇ AUTO GEMINI PATH: Full Elastic Projection ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     anchors = sorted(whisper_words, key=lambda x: x["start"])
+ 
+     g_starts = [float(p.get("start", 0)) for p in phrases]
+@@ -1111,16 +1111,16 @@
+     return aligned
+ 
+ 
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # UPDATED stage_burn_sinhala_captions
+ # Key change: force Whisper into SEGMENT mode for Sinhala audio.
+ # Segment boundaries are 100% reliable; word boundaries on Sinhala are not.
+-# ─────────────────────────────────────────────────────────────────────────────
+-
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # UPDATED stage_burn_sinhala_captions
+ # Key change: Template Engine + Segment anchors
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_burn_sinhala_captions(video_path: str, cap_options: dict) -> str:
+     import json, shutil, subprocess, os
+@@ -1151,9 +1151,9 @@
+     
+     whisper_words = []
+     if is_manual_gemini:
+-        print("[⚙️] Bypassing Whisper entirely for Manual JSON...")
++        print("[ΓÜÖ∩╕Å] Bypassing Whisper entirely for Manual JSON...")
+     else:
+-        print("[⚙️] Running Whisper (base) — SEGMENT-ANCHOR mode for Sinhala...")
++        print("[ΓÜÖ∩╕Å] Running Whisper (base) ΓÇö SEGMENT-ANCHOR mode for Sinhala...")
+         try:
+             from faster_whisper import WhisperModel
+             import importlib.util
+@@ -1206,42 +1206,42 @@
+                     if a["start"] - deduped[-1]["start"] > 0.05:
+                         deduped.append(a)
+                 whisper_words = deduped
+-                print(f"[⚙️] Using {len(w_segments_list)} segment + {len(word_anchors)} word anchors "
+-                      f"→ {len(whisper_words)} total after dedup.")
++                print(f"[ΓÜÖ∩╕Å] Using {len(w_segments_list)} segment + {len(word_anchors)} word anchors "
++                      f"ΓåÆ {len(whisper_words)} total after dedup.")
+             else:
+-                print(f"[⚙️] Using {len(whisper_words)} segment-level anchors.")
++                print(f"[ΓÜÖ∩╕Å] Using {len(whisper_words)} segment-level anchors.")
+ 
+         except Exception as e:
+-            print(f"[⚠️] Whisper failed ({e}). Falling back to Gemini timestamps without hints.")
++            print(f"[ΓÜá∩╕Å] Whisper failed ({e}). Falling back to Gemini timestamps without hints.")
+             whisper_words = []
+ 
+     # 3. Get Perfect Phrases from Gemini (using Whisper hints if available)
+     if is_manual_gemini:
+-        print("[⚙️] Manual Gemini JSON detected! Bypassing API call entirely.")
++        print("[ΓÜÖ∩╕Å] Manual Gemini JSON detected! Bypassing API call entirely.")
+         try:
+             gemini_phrases = json.loads(manual_gemini_json)
+         except Exception as e:
+-            print(f"[❌] FATAL: Invalid manual JSON: {e}")
++            print(f"[Γ¥î] FATAL: Invalid manual JSON: {e}")
+             gemini_phrases = []
+     else:
+         gemini_phrases = get_perfect_sinhala_transcript(temp_audio, cap_options.get("geminiApiKey"), whisper_words)
+ 
+     if not gemini_phrases:
+-        print("[❌] FATAL: Gemini failed. Cannot render captions.")
++        print("[Γ¥î] FATAL: Gemini failed. Cannot render captions.")
+         if os.path.exists(temp_audio): os.remove(temp_audio)
+         return video_path
+ 
+-    print(f"[⚙️] Extracted {len(gemini_phrases)} Singlish phrases from Gemini.")
+-
+-    # ── STEP 3: Drift-corrected alignment ────────────────────────────────────
++    print(f"[ΓÜÖ∩╕Å] Extracted {len(gemini_phrases)} Singlish phrases from Gemini.")
++
++    # ΓöÇΓöÇ STEP 3: Drift-corrected alignment ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     if is_manual_gemini:
+         segments_data = align_phrases_to_whisper(gemini_phrases, [], from_manual=True)
+-        print(f"[✅] Manual alignment done — {len(segments_data)} synced phrases.")
++        print(f"[Γ£à] Manual alignment done ΓÇö {len(segments_data)} synced phrases.")
+     elif whisper_words:
+         segments_data = align_phrases_to_whisper(gemini_phrases, whisper_words, from_manual=False)
+-        print(f"[✅] Alignment done — {len(segments_data)} synced phrases.")
++        print(f"[Γ£à] Alignment done ΓÇö {len(segments_data)} synced phrases.")
+     else:
+-        print("[⚠️] Using Gemini timestamps with +0.10s offset as fallback.")
++        print("[ΓÜá∩╕Å] Using Gemini timestamps with +0.10s offset as fallback.")
+         segments_data = [
+             {"phrase": p["phrase"],
+              "start":  p["start"] + 0.10,
+@@ -1255,7 +1255,7 @@
+         hook_dur = float(cap_options.get("hookDuration", 1.5))
+         segments_data = [s for s in segments_data if float(s["start"]) >= hook_dur]
+ 
+-    # ── NEW: Extract your Full-Stops for the Transition Engine ──
++    # ΓöÇΓöÇ NEW: Extract your Full-Stops for the Transition Engine ΓöÇΓöÇ
+     flash_times = []
+     for i, item in enumerate(segments_data):
+         phrase_text = str(item.get("phrase", ""))
+@@ -1399,8 +1399,8 @@
+ 
+         browser.close()
+ 
+-    # ── FFmpeg overlay — batched with Dynamic Mathematical Animations ─────────
+-    print("[⚙️] Compositing Sinhala captions with cinematic motion math...")
++    # ΓöÇΓöÇ FFmpeg overlay ΓÇö batched with Dynamic Mathematical Animations ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    print("[ΓÜÖ∩╕Å] Compositing Sinhala captions with cinematic motion math...")
+ 
+     CHUNK = 50
+     current_video = video_path
+@@ -1467,16 +1467,16 @@
+     if os.path.exists(temp_audio):
+         os.remove(temp_audio)
+ 
+-    print(f"[✅] Perfect Sinhala CSS captions burned with '{anim_style}' animation: {output_vid}")
++    print(f"[Γ£à] Perfect Sinhala CSS captions burned with '{anim_style}' animation: {output_vid}")
+     return output_vid
+ 
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 10. CINEMATIC BOTTOM GLOW ENGINE
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_bottom_glow(video_path: str, color_hex: str) -> str:
+-    print(f"[⚙️] Adding cinematic bottom glow ({color_hex})...")
++    print(f"[ΓÜÖ∩╕Å] Adding cinematic bottom glow ({color_hex})...")
+     import cv2
+     import numpy as np
+     
+@@ -1535,16 +1535,16 @@
+     try:
+         subprocess.run(cmd, check=True, capture_output=True)
+         if os.path.exists(overlay_png): os.remove(overlay_png)
+-        print(f"[✅] Cinematic Bottom Glow applied: {output_vid}")
++        print(f"[Γ£à] Cinematic Bottom Glow applied: {output_vid}")
+         return output_vid
+     except subprocess.CalledProcessError:
+-        print(f"[⚠️] Bottom Glow failed. Skipping.")
++        print(f"[ΓÜá∩╕Å] Bottom Glow failed. Skipping.")
+         if os.path.exists(overlay_png): os.remove(overlay_png)
+         return video_path
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 10.5 CINEMATIC BEAUTY FILTER ENGINE
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_beauty_filter(video_path: str, options: dict) -> str:
+     import cv2
+@@ -1553,7 +1553,7 @@
+     from mediapipe.tasks import python as mp_python
+     from mediapipe.tasks.python import vision
+     
+-    print("[⚙️] Booting AI Face Mesh Beauty Engine (MediaPipe Tasks + OpenCV)...")
++    print("[ΓÜÖ∩╕Å] Booting AI Face Mesh Beauty Engine (MediaPipe Tasks + OpenCV)...")
+     base_dir    = os.path.dirname(os.path.abspath(video_path))
+     output_vid  = os.path.splitext(video_path)[0] + "_beauty.mp4"
+     
+@@ -1561,7 +1561,7 @@
+     model_path = os.path.join(engine_dir, "pretrained_models", "face_landmarker.task")
+     os.makedirs(os.path.dirname(model_path), exist_ok=True)
+     if not os.path.exists(model_path):
+-        print("[⚙️] Downloading MediaPipe Face Landmarker model...")
++        print("[ΓÜÖ∩╕Å] Downloading MediaPipe Face Landmarker model...")
+         import urllib.request
+         urllib.request.urlretrieve(
+             "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+@@ -1594,7 +1594,7 @@
+     try:
+         process = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+     except Exception as e:
+-        print(f"[❌] Failed to open FFmpeg pipe: {e}")
++        print(f"[Γ¥î] Failed to open FFmpeg pipe: {e}")
+         return video_path
+     
+     LEFT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+@@ -1643,7 +1643,7 @@
+     process.stdin.close()
+     process.wait()
+     
+-    print(f"[✅] AI Beauty Engine complete: {output_vid}")
++    print(f"[Γ£à] AI Beauty Engine complete: {output_vid}")
+     return output_vid
+ 
+ 
+@@ -1670,13 +1670,13 @@
+     if os.path.exists(overlay_png):
+         os.remove(overlay_png)
+ 
+-    print(f"[✅] Bottom glow applied: {output_vid}")
++    print(f"[Γ£à] Bottom glow applied: {output_vid}")
+     return output_vid
+ 
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 11. AI BACKGROUND FX ENGINE (MediaPipe)
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_background_fx(video_path: str, bg_options: dict) -> str:
+     import cv2
+@@ -1691,7 +1691,7 @@
+     sub_scale     = int(bg_options.get("subjectScale", 100))
+     sub_y         = int(bg_options.get("subjectY", 0))
+ 
+-    print(f"[⚙️] Background FX Engine — mode: {mode} | keying: {keying_mode}")
++    print(f"[ΓÜÖ∩╕Å] Background FX Engine ΓÇö mode: {mode} | keying: {keying_mode}")
+ 
+     base_dir   = os.path.dirname(os.path.abspath(video_path))
+     temp_vid   = os.path.join(base_dir, "_temp_bg_fx.mp4")
+@@ -1714,14 +1714,14 @@
+ 
+     custom_bg_img = None
+     if mode == "image" and bg_image_path and os.path.exists(bg_image_path):
+-        print(f"[⚙️] Loading custom background: {os.path.basename(bg_image_path)}")
++        print(f"[ΓÜÖ∩╕Å] Loading custom background: {os.path.basename(bg_image_path)}")
+         custom_bg_img = cv2.imread(bg_image_path)
+         if custom_bg_img is not None:
+             custom_bg_img = cv2.resize(custom_bg_img, (w, h))
+ 
+-    # ── Chroma Key Path (FFmpeg Hardware Accelerated) ─────────────────────
++    # ΓöÇΓöÇ Chroma Key Path (FFmpeg Hardware Accelerated) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     if keying_mode == "chroma":
+-        print("[🟩] Green Screen chroma-key active — using FFmpeg hardware math.")
++        print("[≡ƒƒ⌐] Green Screen chroma-key active ΓÇö using FFmpeg hardware math.")
+         cap.release()
+         out.release()
+         if os.path.exists(temp_vid): os.remove(temp_vid)
+@@ -1763,7 +1763,7 @@
+             filter_complex = f"color=c=#{ff_color}:s={w}x{h}:d=9999[bg];{fg_filter};[bg][fg_scaled]{overlay_cmd}[outv]"
+             inputs = ["-i", video_path]
+ 
+-        print("[⚙️] Running ultra-fast FFmpeg render pipeline...")
++        print("[ΓÜÖ∩╕Å] Running ultra-fast FFmpeg render pipeline...")
+         cmd = [
+             "ffmpeg", *inputs, "-i", temp_audio,
+             "-filter_complex", filter_complex,
+@@ -1777,19 +1777,19 @@
+             subprocess.run(cmd, check=True, capture_output=True)
+         except subprocess.CalledProcessError as e:
+             err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+-            print(f"[❌] FFmpeg Engine Failed:\n{err_msg}")
++            print(f"[Γ¥î] FFmpeg Engine Failed:\n{err_msg}")
+             raise
+ 
+         for f in [temp_audio]:
+             if os.path.exists(f): os.remove(f)
+ 
+-        print(f"[✅] Background FX applied: {output_vid}")
++        print(f"[Γ£à] Background FX applied: {output_vid}")
+         return output_vid
+ 
+ 
+-    # ── WebGL GPU Soft Key Path (Playwright) ──────────────────────────────
++    # ΓöÇΓöÇ WebGL GPU Soft Key Path (Playwright) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     elif keying_mode == "webgl":
+-        print("[🌐] Booting WebGL Browser Engine for Cinematic Soft Keying...")
++        print("[≡ƒîÉ] Booting WebGL Browser Engine for Cinematic Soft Keying...")
+         from playwright.sync_api import sync_playwright
+         import pathlib
+         import json
+@@ -1990,7 +1990,7 @@
+         with open(webgl_html_path, "w", encoding="utf-8") as f:
+             f.write(html_content)
+             
+-        print("[⚙️] Running headless WebGL compositor via GPU...")
++        print("[ΓÜÖ∩╕Å] Running headless WebGL compositor via GPU...")
+         
+         # We must use specific flags to force hardware GPU rendering in headless mode
+         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright")
+@@ -2023,7 +2023,7 @@
+             download.save_as(webgl_webm_path)
+             browser.close()
+             
+-        print("[⚙️] Remuxing WebGL WebM with original audio...")
++        print("[ΓÜÖ∩╕Å] Remuxing WebGL WebM with original audio...")
+         subprocess.run([
+             "ffmpeg", "-i", webgl_webm_path, "-i", temp_audio,
+             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+@@ -2035,21 +2035,21 @@
+         for f in [webgl_html_path, webgl_webm_path, temp_audio]:
+             if os.path.exists(f): os.remove(f)
+             
+-        print(f"[✅] Background FX applied (WebGL): {output_vid}")
++        print(f"[Γ£à] Background FX applied (WebGL): {output_vid}")
+         return output_vid
+ 
+-    # ── MediaPipe AI Segmentation Path ───────────────────────────────────
++    # ΓöÇΓöÇ MediaPipe AI Segmentation Path ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     else:
+         import mediapipe as mp
+         from mediapipe.tasks import python as mp_python
+         from mediapipe.tasks.python import vision
+ 
+-        print("[🧠] Booting MediaPipe AI Selfie Segmenter...")
++        print("[≡ƒºá] Booting MediaPipe AI Selfie Segmenter...")
+         engine_dir = os.path.dirname(os.path.abspath(__file__))
+         model_path = os.path.join(engine_dir, "pretrained_models", "selfie_segmenter.tflite")
+         os.makedirs(os.path.dirname(model_path), exist_ok=True)
+         if not os.path.exists(model_path):
+-            print("[⚙️] Downloading MediaPipe Selfie Segmenter model...")
++            print("[ΓÜÖ∩╕Å] Downloading MediaPipe Selfie Segmenter model...")
+             import urllib.request
+             urllib.request.urlretrieve(
+                 "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite",
+@@ -2083,7 +2083,7 @@
+     cap.release()
+     out.release()
+ 
+-    print("[⚙️] Remuxing audio to processed video...")
++    print("[ΓÜÖ∩╕Å] Remuxing audio to processed video...")
+     subprocess.run([
+         "ffmpeg", "-i", temp_vid, "-i", temp_audio,
+         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+@@ -2095,16 +2095,16 @@
+     for f in [temp_vid, temp_audio]:
+         if os.path.exists(f): os.remove(f)
+ 
+-    print(f"[✅] Background FX applied: {output_vid}")
++    print(f"[Γ£à] Background FX applied: {output_vid}")
+     return output_vid
+ 
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 12. SEMANTIC SMART-ZOOM ENGINE
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_semantic_zoom(video_path: str, zoom_options: dict) -> str:
+-    print("[⚙️] Analyzing semantic context for Smart Zooms...")
++    print("[ΓÜÖ∩╕Å] Analyzing semantic context for Smart Zooms...")
+     base_dir   = os.path.dirname(os.path.abspath(video_path))
+     output_vid = os.path.splitext(video_path)[0] + "_smartzoom.mp4"
+     temp_audio = os.path.join(base_dir, "_zoom_audio.wav")
+@@ -2121,8 +2121,8 @@
+         "insane", "crazy", "truth", "give", "warning", "attention"
+     ]
+     si_hooks = [
+-        "වැදගත්", "රහස", "අහන්න", "බලන්න", "සල්ලි", "හේතුව", "හොඳම",
+-        "පිස්සුවක්", "ඇත්ත", "අනිවාර්යයෙන්", "scam", "trick", "money",
++        "α╖Çα╖Éα╢»α╢£α╢¡α╖è", "α╢╗α╖äα╖â", "α╢àα╖äα╢▒α╖èα╢▒", "α╢╢α╢╜α╢▒α╖èα╢▒", "α╖âα╢╜α╖èα╢╜α╖Æ", "α╖äα╖Üα╢¡α╖öα╖Ç", "α╖äα╖£α╢│α╢╕",
++        "α╢┤α╖Æα╖âα╖èα╖âα╖öα╖Çα╢Üα╖è", "α╢çα╢¡α╖èα╢¡", "α╢àα╢▒α╖Æα╖Çα╖Åα╢╗α╖èα╢║α╢║α╖Öα╢▒α╖è", "scam", "trick", "money",
+         "direct", "skill", "professional field engineer", "field engineer"
+     ]
+ 
+@@ -2130,7 +2130,7 @@
+     lang = zoom_options.get("captionLanguage", "en")
+ 
+     if lang == "si":
+-        print("[⚙️] Using Gemini to detect Sinhala hook words for zooming...")
++        print("[ΓÜÖ∩╕Å] Using Gemini to detect Sinhala hook words for zooming...")
+         phrases = get_perfect_sinhala_transcript(temp_audio, zoom_options.get("geminiApiKey"))
+         for p in phrases:
+             phrase_text = p.get("phrase", "").lower()
+@@ -2138,7 +2138,7 @@
+                 start = float(p.get("start", 0))
+                 zoom_intervals.append((start, start + 2.5))
+     else:
+-        print("[⚙️] Using Whisper to detect English hook words for zooming...")
++        print("[ΓÜÖ∩╕Å] Using Whisper to detect English hook words for zooming...")
+         try:
+             from faster_whisper import WhisperModel
+             try:
+@@ -2157,14 +2157,14 @@
+                     if clean_word in en_hooks:
+                         zoom_intervals.append((w.start, w.start + 2.5))
+         except Exception as e:
+-            print(f"[⚠️] Whisper zoom detection failed: {e}")
++            print(f"[ΓÜá∩╕Å] Whisper zoom detection failed: {e}")
+ 
+     if not zoom_intervals:
+-        print("[⚙️] No hook words found. Skipping Smart Zoom.")
++        print("[ΓÜÖ∩╕Å] No hook words found. Skipping Smart Zoom.")
+         if os.path.exists(temp_audio): os.remove(temp_audio)
+         return video_path
+ 
+-    print(f"[🎬] Found {len(zoom_intervals)} impact moments. Rendering smooth zoompans...")
++    print(f"[≡ƒÄ¼] Found {len(zoom_intervals)} impact moments. Rendering smooth zoompans...")
+ 
+     probe = subprocess.run(
+         ["ffprobe", "-v", "error", "-select_streams", "v:0",
+@@ -2199,20 +2199,20 @@
+             output_vid, "-y"
+         ], check=True, capture_output=True)
+         if os.path.exists(temp_audio): os.remove(temp_audio)
+-        print(f"[✅] Semantic Smooth Zoom applied: {output_vid}")
++        print(f"[Γ£à] Semantic Smooth Zoom applied: {output_vid}")
+         return output_vid
+     except subprocess.CalledProcessError as e:
+         err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+-        print(f"[❌] Smart Zoom failed: {err_msg}")
++        print(f"[Γ¥î] Smart Zoom failed: {err_msg}")
+         return video_path
+ 
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 13. AUTO TRANSITIONS ENGINE
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_hardcode_flash(video_path: str, options: dict) -> str:
+-    print("[⚙️] Loading AI Director timestamps for Camera Flashes...")
++    print("[ΓÜÖ∩╕Å] Loading AI Director timestamps for Camera Flashes...")
+     base_dir   = os.path.dirname(os.path.abspath(video_path))
+     output_vid = os.path.splitext(video_path)[0] + "_flashes.mp4"
+     json_path  = os.path.join(base_dir, "_flash_times.json")
+@@ -2227,10 +2227,10 @@
+         os.remove(json_path)
+ 
+     if not flash_times:
+-        print("[⚙️] No cinematic cuts detected. Skipping transitions.")
++        print("[ΓÜÖ∩╕Å] No cinematic cuts detected. Skipping transitions.")
+         return video_path
+ 
+-    print(f"[🎬] Found {len(flash_times)} Director cuts. Compositing Camera Flashes...")
++    print(f"[≡ƒÄ¼] Found {len(flash_times)} Director cuts. Compositing Camera Flashes...")
+ 
+     exprs     = []
+     for t in flash_times:
+@@ -2259,7 +2259,7 @@
+         )
+         audio_map = "[a_final]"
+     else:
+-        print("[⚠️] whoosh_sfx.MP3 missing. Visual flash only.")
++        print("[ΓÜá∩╕Å] whoosh_sfx.MP3 missing. Visual flash only.")
+ 
+     cmd = ["ffmpeg"] + inputs
+     if has_sfx:
+@@ -2275,25 +2275,25 @@
+ 
+     try:
+         subprocess.run(cmd, check=True, capture_output=True)
+-        print(f"[✅] Camera Flashes applied: {output_vid}")
++        print(f"[Γ£à] Camera Flashes applied: {output_vid}")
+         return output_vid
+     except subprocess.CalledProcessError as e:
+         err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+-        print(f"[❌] Flashes failed: {err_msg}")
++        print(f"[Γ¥î] Flashes failed: {err_msg}")
+         return video_path
+ 
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 14.5 AUDIO MERGER ENGINE
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_merge_audio(video_path: str, options: dict) -> str:
+     audio_path = options.get("mergeAudioPath", "").strip()
+     if not audio_path or not os.path.exists(audio_path):
+-        print(f"[⚠️] Audio Merger skipped: No valid audio file provided.")
++        print(f"[ΓÜá∩╕Å] Audio Merger skipped: No valid audio file provided.")
+         return video_path
+         
+-    print(f"[⚙️] Booting Audio Merger Engine... Merging {os.path.basename(audio_path)}")
++    print(f"[ΓÜÖ∩╕Å] Booting Audio Merger Engine... Merging {os.path.basename(audio_path)}")
+     
+     base_dir = os.path.dirname(os.path.abspath(video_path))
+     output_vid = os.path.splitext(video_path)[0] + "_merged.mp4"
+@@ -2325,20 +2325,20 @@
+     try:
+         import subprocess
+         subprocess.run(cmd, check=True, capture_output=True)
+-        print(f"[✅] Audio merged successfully: {output_vid}")
++        print(f"[Γ£à] Audio merged successfully: {output_vid}")
+         return output_vid
+     except subprocess.CalledProcessError as e:
+         err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+-        print(f"[❌] Audio merger failed: {err_msg}")
++        print(f"[Γ¥î] Audio merger failed: {err_msg}")
+         return video_path
+     except Exception as e:
+-        print(f"[❌] Audio merger failed: {e}")
++        print(f"[Γ¥î] Audio merger failed: {e}")
+         return video_path
+ 
+ 
+-# ─────────────────────────────────────────────
+-# 15. MP4 → MP3 CONVERSION ENGINE
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 15. MP4 ΓåÆ MP3 CONVERSION ENGINE
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_mp4_to_mp3(video_path: str, options: dict = None) -> str:
+     """
+@@ -2346,7 +2346,7 @@
+ 
+     Options keys (all optional):
+       mp3Quality  : "128k" | "192k" | "320k" | "lossless"  (default: "192k")
+-      mp3Normalize: True/False — apply -14 LUFS broadcast loudness normalisation
++      mp3Normalize: True/False ΓÇö apply -14 LUFS broadcast loudness normalisation
+       mp3Metadata : dict with "title", "artist", "album" for ID3 tags
+     """
+     if options is None:
+@@ -2359,28 +2359,28 @@
+     base_dir    = os.path.dirname(os.path.abspath(video_path))
+     stem        = os.path.splitext(os.path.basename(video_path))[0]
+ 
+-    # ── Decide output format ──────────────────────────────────────────────────
++    # ΓöÇΓöÇ Decide output format ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     if quality == "lossless":
+         out_ext   = ".flac"
+         codec_args = ["-c:a", "flac", "-compression_level", "8"]
+-        print("[⚙️] MP4 → FLAC (lossless) export...")
++        print("[ΓÜÖ∩╕Å] MP4 ΓåÆ FLAC (lossless) export...")
+     else:
+         out_ext   = ".mp3"
+         # Validate bitrate; fall back to 192k on unknown input
+         valid_bitrates = {"128k", "192k", "320k"}
+         bitrate   = quality if quality in valid_bitrates else "192k"
+         codec_args = ["-c:a", "libmp3lame", "-b:a", bitrate, "-q:a", "0"]
+-        print(f"[⚙️] MP4 → MP3 at {bitrate} export...")
++        print(f"[ΓÜÖ∩╕Å] MP4 ΓåÆ MP3 at {bitrate} export...")
+ 
+     output_path = os.path.join(base_dir, stem + out_ext)
+ 
+-    # ── Build FFmpeg command ──────────────────────────────────────────────────
++    # ΓöÇΓöÇ Build FFmpeg command ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     cmd = ["ffmpeg", "-i", video_path, "-vn"]
+ 
+     # Optional loudness normalisation (-14 LUFS broadcast standard)
+     if normalize:
+-        print("[⚙️] Applying -14 LUFS loudness normalisation...")
+-        # Two-pass loudnorm: detect → apply
++        print("[ΓÜÖ∩╕Å] Applying -14 LUFS loudness normalisation...")
++        # Two-pass loudnorm: detect ΓåÆ apply
+         probe_cmd = [
+             "ffmpeg", "-i", video_path, "-vn",
+             "-af", "loudnorm=I=-14:TP=-1:LRA=11:print_format=json",
+@@ -2426,22 +2426,22 @@
+     try:
+         subprocess.run(cmd, check=True, capture_output=True)
+         size_mb = os.path.getsize(output_path) / (1024 * 1024)
+-        print(f"[✅] Audio exported → {os.path.basename(output_path)}  ({size_mb:.2f} MB)")
++        print(f"[Γ£à] Audio exported ΓåÆ {os.path.basename(output_path)}  ({size_mb:.2f} MB)")
+         return output_path
+     except subprocess.CalledProcessError as e:
+         err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+-        print(f"[❌] MP4 → MP3 conversion failed: {err_msg}")
++        print(f"[Γ¥î] MP4 ΓåÆ MP3 conversion failed: {err_msg}")
+         raise
+ 
+ 
+-# ─────────────────────────────────────────────────────────────────────────────
+-
+-# ─────────────────────────────────────────────────────────────────────────────
+-# ─────────────────────────────────────────────────────────────────────────────
+-# 17. CINEMATIC GRADE ENGINE — "The Pro Look"
+-#     Replicates: BG replace · S-curve grade · skin warmth · vignette · sharpen
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 17. CINEMATIC GRADE ENGINE ΓÇö "The Pro Look"
++#     Replicates: BG replace ┬╖ S-curve grade ┬╖ skin warmth ┬╖ vignette ┬╖ sharpen
+ #     Drop this BEFORE stage_starting_hook() in your pipeline
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ def stage_cinematic_grade(video_path: str, options: dict) -> str:
+     import cv2
+     import numpy as np
+@@ -2454,26 +2454,26 @@
+     if grade_style == "none":
+         return video_path
+ 
+-    print(f"[🎨] Cinematic Grade Engine — style: {grade_style}")
++    print(f"[≡ƒÄ¿] Cinematic Grade Engine ΓÇö style: {grade_style}")
+ 
+     base_dir   = os.path.dirname(os.path.abspath(video_path))
+     output_vid = os.path.splitext(video_path)[0] + "_graded.mp4"
+     engine_dir = os.path.dirname(os.path.abspath(__file__))
+ 
+-    # ── Style presets ─────────────────────────────────────────────────────
++    # ΓöÇΓöÇ Style presets ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     # Each preset defines:
+-    #   bg_color  : (B, G, R) — solid studio backdrop
++    #   bg_color  : (B, G, R) ΓÇö solid studio backdrop
+     #   bg_blur   : blur radius on bg plate (0 = solid color, >0 = blurred real bg)
+-    #   lift      : shadow lift amount (0.0–0.3)
++    #   lift      : shadow lift amount (0.0ΓÇô0.3)
+     #   saturation: color saturation multiplier
+-    #   warmth    : red/yellow push on midtones (0.0–1.0)
+-    #   contrast  : S-curve strength (0.0–1.0)
+-    #   sharpen   : unsharp mask strength (0.0–1.0)
+-    #   vignette  : vignette strength (0.0–1.0)
++    #   warmth    : red/yellow push on midtones (0.0ΓÇô1.0)
++    #   contrast  : S-curve strength (0.0ΓÇô1.0)
++    #   sharpen   : unsharp mask strength (0.0ΓÇô1.0)
++    #   vignette  : vignette strength (0.0ΓÇô1.0)
+ 
+     PRESETS = {
+         "capcut_studio": {
+-            "bg_color":   (20, 38, 38),   # Deep teal — exactly what the CapCut vid used
++            "bg_color":   (20, 38, 38),   # Deep teal ΓÇö exactly what the CapCut vid used
+             "bg_blur":     0,
+             "lift":        0.06,
+             "saturation":  1.25,
+@@ -2503,7 +2503,7 @@
+             "vignette":    0.45,
+         },
+         "blurred_bg": {
+-            "bg_color":   None,           # Keep real bg — just blur it heavily
++            "bg_color":   None,           # Keep real bg ΓÇö just blur it heavily
+             "bg_blur":     55,
+             "lift":        0.05,
+             "saturation":  1.2,
+@@ -2516,7 +2516,7 @@
+ 
+     p = PRESETS.get(grade_style, PRESETS["capcut_studio"])
+ 
+-    # ── Load MediaPipe segmenter ──────────────────────────────────────────
++    # ΓöÇΓöÇ Load MediaPipe segmenter ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     model_path = os.path.join(engine_dir, "pretrained_models", "selfie_segmenter.tflite")
+     if not os.path.exists(model_path):
+         os.makedirs(os.path.dirname(model_path), exist_ok=True)
+@@ -2529,7 +2529,7 @@
+     seg_options  = vision.ImageSegmenterOptions(
+         base_options=base_options, output_confidence_masks=True)
+ 
+-    # ── Build LUT helpers ─────────────────────────────────────────────────
++    # ΓöÇΓöÇ Build LUT helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     def build_s_curve_lut(strength: float) -> np.ndarray:
+         x = np.arange(256, dtype=np.float32)
+         t = (x - 128.0) / 128.0
+@@ -2545,7 +2545,7 @@
+     def apply_lut(img: np.ndarray, lut: np.ndarray) -> np.ndarray:
+         return lut[img]
+ 
+-    # ── Skin-tone aware warmth ────────────────────────────────────────────
++    # ΓöÇΓöÇ Skin-tone aware warmth ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     def push_warmth(img_bgr: np.ndarray, amount: float) -> np.ndarray:
+         if abs(amount) < 0.01:
+             return img_bgr
+@@ -2572,7 +2572,7 @@
+ 
+         return np.clip(result, 0, 255).astype(np.uint8)
+ 
+-    # ── Vignette ──────────────────────────────────────────────────────────
++    # ΓöÇΓöÇ Vignette ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     def make_vignette(h: int, w: int, strength: float) -> np.ndarray:
+         cx, cy = w / 2.0, h / 2.0
+         Y, X = np.ogrid[:h, :w]
+@@ -2580,12 +2580,12 @@
+         vig = 1.0 - strength * np.clip(dist, 0.0, 1.0) ** 1.5
+         return vig.astype(np.float32)
+ 
+-    # ── Unsharp mask ──────────────────────────────────────────────────────
++    # ΓöÇΓöÇ Unsharp mask ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     def unsharp_mask(img: np.ndarray, strength: float) -> np.ndarray:
+         blur = cv2.GaussianBlur(img, (0, 0), 3.0)
+         return cv2.addWeighted(img, 1.0 + strength, blur, -strength, 0)
+ 
+-    # ── Per-frame grade function ──────────────────────────────────────────
++    # ΓöÇΓöÇ Per-frame grade function ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     s_lut   = build_s_curve_lut(p["contrast"])
+     lift_lut = build_lift_lut(p["lift"])
+ 
+@@ -2691,14 +2691,14 @@
+             writer.stdin.write(graded.tobytes())
+             frame_idx += 1
+             if frame_idx % 30 == 0:
+-                print(f"  [🎨] {frame_idx}/{total} frames graded...")
++                print(f"  [≡ƒÄ¿] {frame_idx}/{total} frames graded...")
+                 gc.collect()
+ 
+     cap.release()
+     writer.stdin.close()
+     writer.wait()
+ 
+-    print("[🎨] Re-muxing audio...")
++    print("[≡ƒÄ¿] Re-muxing audio...")
+     subprocess.run([
+         "ffmpeg",
+         "-i", temp_no_audio,
+@@ -2711,13 +2711,13 @@
+     ], check=True, capture_output=True)
+ 
+     os.remove(temp_no_audio)
+-    print(f"[✅] Cinematic grade done → {output_vid}")
++    print(f"[Γ£à] Cinematic grade done ΓåÆ {output_vid}")
+     return output_vid
+ 
+ 
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 15.5 TEXT PATTERN INTERRUPT HOOK ENGINE
+-# ─────────────────────────────────────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ def stage_visual_hook(video_path: str, options: dict) -> str:
+     import json
+     import os
+@@ -2729,7 +2729,7 @@
+     if not hook_pri_text and not hook_sec_text:
+         return video_path
+         
+-    print(f"[⚙️] Booting Visual Text Hook Engine (Pattern Interrupt)...")
++    print(f"[ΓÜÖ∩╕Å] Booting Visual Text Hook Engine (Pattern Interrupt)...")
+     
+     base_dir = os.path.dirname(os.path.abspath(video_path))
+     output_vid = os.path.splitext(video_path)[0] + "_texthook.mp4"
+@@ -2899,7 +2899,7 @@
+         page.screenshot(path=png_path, omit_background=True)
+         browser.close()
+         
+-    print("[⚙️] Compositing Snap-Zoom Pattern Interrupt with FFmpeg...")
++    print("[ΓÜÖ∩╕Å] Compositing Snap-Zoom Pattern Interrupt with FFmpeg...")
+     
+     # Fast punchy camera flash at start, plus glitchy shake for 0.15s
+     # (Flash removed so it doesn't overwrite the Visual SFX Hook underneath)
+@@ -2919,18 +2919,18 @@
+     try:
+         subprocess.run(cmd, check=True, capture_output=True)
+         if os.path.exists(png_path): os.remove(png_path)
+-        print(f"[✅] Visual Text Hook applied: {output_vid}")
++        print(f"[Γ£à] Visual Text Hook applied: {output_vid}")
+         return output_vid
+     except subprocess.CalledProcessError as e:
+         err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+-        print(f"[❌] Visual Text Hook failed: {err_msg}")
++        print(f"[Γ¥î] Visual Text Hook failed: {err_msg}")
+         if os.path.exists(png_path): os.remove(png_path)
+         return video_path
+ 
+ 
+ # 16. HEADLESS CSS VISUAL HOOK ENGINE (Playwright + Web Animations)
+-#     "The Subject Arrives" — AE/TikTok Grade via HTML DOM Compositing
+-# ─────────────────────────────────────────────────────────────────────────────
++#     "The Subject Arrives" ΓÇö AE/TikTok Grade via HTML DOM Compositing
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ def stage_starting_hook(video_path: str, options: dict) -> str:
+     import cv2
+     import numpy as np
+@@ -2944,7 +2944,7 @@
+     if hook_type == "none":
+         return video_path
+ 
+-    print(f"[⚙️] Booting CSS Headless Hook Engine — {hook_type}")
++    print(f"[ΓÜÖ∩╕Å] Booting CSS Headless Hook Engine ΓÇö {hook_type}")
+     base_dir   = os.path.dirname(os.path.abspath(video_path))
+     temp_vid   = os.path.join(base_dir, "_temp_hook.mp4")
+     output_vid = os.path.splitext(video_path)[0] + "_hook.mp4"
+@@ -2953,7 +2953,7 @@
+ 
+     os.makedirs(frames_dir, exist_ok=True)
+ 
+-    # ── 1. MediaPipe: Extract Background & Subject ────────────────────────
++    # ΓöÇΓöÇ 1. MediaPipe: Extract Background & Subject ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     model_path = os.path.join(engine_dir, "pretrained_models", "selfie_segmenter.tflite")
+     if not os.path.exists(model_path):
+         os.makedirs(os.path.dirname(model_path), exist_ok=True)
+@@ -3021,7 +3021,7 @@
+         _, bg_buf = cv2.imencode('.jpg', bg_clean, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+         bg_b64 = base64.b64encode(bg_buf).decode('utf-8')
+ 
+-    # ── 2. The HTML/CSS Render Engine ─────────────────────────────────────
++    # ΓöÇΓöÇ 2. The HTML/CSS Render Engine ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     html_template = f"""<!DOCTYPE html>
+     <html>
+     <head>
+@@ -3099,7 +3099,7 @@
+             const easeOutExpo = t => t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+             const easeOutQuint = t => 1 - Math.pow(1 - t, 5);
+             
+-            // ── AFTER EFFECTS PARALLAX BACKGROUND ──
++            // ΓöÇΓöÇ AFTER EFFECTS PARALLAX BACKGROUND ΓöÇΓöÇ
+             // Creates a cinematic Z-space push-in while pulling focus, blending back to normal
+             let blendOut = easeOutQuint(Math.max(0, (progress - 0.5) * 2)); // Fades from 0 to 1 in the second half
+             let bgScale = 1.05 + ((1 - blendOut) * 0.05); // Smooth subtle zoom
+@@ -3107,7 +3107,7 @@
+             bg.style.transform = `scale(${{bgScale}})`;
+             bg.style.filter = `blur(${{bgBlur}}px) brightness(${{0.6 + progress * 0.4}})`;
+             
+-            // ── PREMIUM SUBJECT BASE STYLE ──
++            // ΓöÇΓöÇ PREMIUM SUBJECT BASE STYLE ΓöÇΓöÇ
+             // The shadow tightens and fades as the subject lands, perfectly stitching into the main video
+             let shadowSpread = (1 - blendOut) * 60;
+             let shadowOpacity = (1 - blendOut) * 0.9;
+@@ -3300,10 +3300,10 @@
+       </script>
+     </body>
+     </html>"""
+-    # ── 3. Frame Rendering via Playwright ─────────────────────────────────
++    # ΓöÇΓöÇ 3. Frame Rendering via Playwright ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "ms-playwright")
+     
+-    print("[⚙️] Stepping CSS frames in headless Chrome...")
++    print("[ΓÜÖ∩╕Å] Stepping CSS frames in headless Chrome...")
+     with sync_playwright() as p:
+         browser = p.chromium.launch(headless=True)
+         context = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=1)
+@@ -3317,8 +3317,8 @@
+             
+         browser.close()
+ 
+-    # ── 4. FFmpeg Compositing ─────────────────────────────────────────────
+-    print("[⚙️] Re-compositing sequence with audio...")
++    # ΓöÇΓöÇ 4. FFmpeg Compositing ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    print("[ΓÜÖ∩╕Å] Re-compositing sequence with audio...")
+     sfx_map   = {"flash":"flash_sfx.MP3","flash_drop":"flash_sfx.MP3", "drop_in":"impact_sfx.MP3","glitch":"glitch_sfx.MP3","impact":"impact_sfx.MP3", "capcut_drop":"glitch_sfx.MP3", "blur_zoom":"woosh with echo.MP3"}
+     sfx_audio = os.path.join(engine_dir, "assets", sfx_map.get(hook_type, ""))
+     has_sfx   = os.path.exists(sfx_audio)
+@@ -3352,12 +3352,12 @@
+     shutil.rmtree(frames_dir, ignore_errors=True)
+     cap.release()
+     
+-    print(f"[✅] CSS Hook sequence rendered → {output_vid}")
++    print(f"[Γ£à] CSS Hook sequence rendered ΓåÆ {output_vid}")
+     return output_vid
+ 
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # 18. LIGHTNING-FAST STABILIZATION ENGINE
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def _interpolate_nans(arr: np.ndarray) -> np.ndarray:
+     """Linearly interpolate NaN gaps (dropped detections) instead of
+@@ -3395,9 +3395,9 @@
+ 
+     engine_backend = options.get('stabilizerBackend', 'cpu')
+     if engine_backend == 'gpu':
+-        print("[⚙️] Booting AI Facial Anchor Stabilizer (PyTorch GPU Mode) v2...")
++        print("[ΓÜÖ∩╕Å] Booting AI Facial Anchor Stabilizer (PyTorch GPU Mode) v2...")
+     else:
+-        print("[⚙️] Booting AI Facial Anchor Stabilizer (Micro-Shock Absorber CPU) v2...")
++        print("[ΓÜÖ∩╕Å] Booting AI Facial Anchor Stabilizer (Micro-Shock Absorber CPU) v2...")
+ 
+     base_dir = os.path.dirname(os.path.abspath(video_path))
+     output_vid = os.path.splitext(video_path)[0] + "_stabilized.mp4"
+@@ -3409,7 +3409,7 @@
+         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+ 
+-        print(f"[⚙️] Pass 1: Extracting rigid facial trajectory (multi-point anchor using {engine_backend.upper()})...")
++        print(f"[ΓÜÖ∩╕Å] Pass 1: Extracting rigid facial trajectory (multi-point anchor using {engine_backend.upper()})...")
+         raw_x, raw_y = [], []
+         valid_frames = []
+ 
+@@ -3447,7 +3447,7 @@
+                         raw_y.append(np.nan)
+                         valid_frames.append(False)
+             except ImportError:
+-                print("[⚠️] facenet-pytorch not installed! Falling back to CPU...")
++                print("[ΓÜá∩╕Å] facenet-pytorch not installed! Falling back to CPU...")
+                 engine_backend = 'cpu' # Fallthrough to CPU below...
+                 
+         if engine_backend == 'cpu':
+@@ -3455,10 +3455,10 @@
+             from mediapipe.tasks import python as mp_python
+             from mediapipe.tasks.python import vision
+             
+-            # ─── Load MediaPipe Face Landmarker ───────────────────────────────────
++            # ΓöÇΓöÇΓöÇ Load MediaPipe Face Landmarker ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+             model_path = os.path.join(engine_dir, "pretrained_models", "face_landmarker.task")
+             if not os.path.exists(model_path):
+-                print("[⚙️] Downloading MediaPipe Face Landmarker model...")
++                print("[ΓÜÖ∩╕Å] Downloading MediaPipe Face Landmarker model...")
+                 os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                 try:
+                     urllib.request.urlretrieve(
+@@ -3466,7 +3466,7 @@
+                         model_path
+                     )
+                 except Exception as e:
+-                    print(f"[⚠️] Failed to download model: {e}. Using original video.")
++                    print(f"[ΓÜá∩╕Å] Failed to download model: {e}. Using original video.")
+                     return video_path
+                     
+             base_options = mp_python.BaseOptions(model_asset_path=model_path)
+@@ -3483,7 +3483,7 @@
+                     if not ret:
+                         break
+ 
+-                    # 🔥 DOWN-SCALE FOR 10X FASTER CPU INFERENCE
++                    # ≡ƒöÑ DOWN-SCALE FOR 10X FASTER CPU INFERENCE
+                     process_w = 480
+                     scale_ratio = process_w / width
+                     process_h = int(height * scale_ratio)
+@@ -3509,17 +3509,17 @@
+         cap.release()
+ 
+         if not any(valid_frames):
+-            print("[⚠️] No face detected. Cannot anchor-stabilize. Falling back to original.")
++            print("[ΓÜá∩╕Å] No face detected. Cannot anchor-stabilize. Falling back to original.")
+             return video_path
+ 
+         trajectory_x = np.array(raw_x, dtype=np.float64)
+         trajectory_y = np.array(raw_y, dtype=np.float64)
+ 
+-        print("[⚙️] Pass 1b: Interpolating dropped-detection gaps...")
++        print("[ΓÜÖ∩╕Å] Pass 1b: Interpolating dropped-detection gaps...")
+         trajectory_x = _interpolate_nans(trajectory_x)
+         trajectory_y = _interpolate_nans(trajectory_y)
+ 
+-        print("[⚙️] Pass 2: Median pre-filter to strip outlier spikes...")
++        print("[ΓÜÖ∩╕Å] Pass 2: Median pre-filter to strip outlier spikes...")
+         # A short median filter removes single/double-frame outliers (blinks,
+         # partial occlusion, brief misdetection) WITHOUT smearing real motion,
+         # unlike the gaussian which just blends outliers into the trajectory.
+@@ -3529,7 +3529,7 @@
+         trajectory_x = median_filter(trajectory_x, size=median_k, mode="nearest")
+         trajectory_y = median_filter(trajectory_y, size=median_k, mode="nearest")
+ 
+-        print("[⚙️] Pass 3: Applying low-pass filter to isolate real (slow) motion...")
++        print("[ΓÜÖ∩╕Å] Pass 3: Applying low-pass filter to isolate real (slow) motion...")
+         sigma_val = float(options.get("vibrationFilterStrength", 8.0))
+         smoothed_x = gaussian_filter1d(trajectory_x, sigma=sigma_val, mode="nearest")
+         smoothed_y = gaussian_filter1d(trajectory_y, sigma=sigma_val, mode="nearest")
+@@ -3537,7 +3537,7 @@
+         shift_x = trajectory_x - smoothed_x
+         shift_y = trajectory_y - smoothed_y
+ 
+-        print("[⚙️] Pass 3b: Clamping correction magnitude...")
++        print("[ΓÜÖ∩╕Å] Pass 3b: Clamping correction magnitude...")
+         # If a correction is asking for a huge shift, it's not "shake" -
+         # it's either a genuine fast head movement or a leftover detection
+         # glitch. Either way, over-correcting it is what produces the
+@@ -3547,7 +3547,7 @@
+         shift_x = _soft_clip(shift_x, max_shift_px)
+         shift_y = _soft_clip(shift_y, max_shift_px)
+ 
+-        print("[⚙️] Pass 4: Rendering smooth frames via FFmpeg pipe...")
++        print("[ΓÜÖ∩╕Å] Pass 4: Rendering smooth frames via FFmpeg pipe...")
+         cmd = [
+             "ffmpeg", "-y", "-f", "rawvideo", "-vcodec", "rawvideo",
+             "-s", f"{width}x{height}", "-pix_fmt", "bgr24", "-r", str(fps), "-i", "-",
+@@ -3587,23 +3587,23 @@
+         process.stdin.close()
+         process.wait()
+ 
+-        print(f"[✅] AI Anchor Stabilization complete (multi-point, interpolated, no spikes): {output_vid}")
++        print(f"[Γ£à] AI Anchor Stabilization complete (multi-point, interpolated, no spikes): {output_vid}")
+         return output_vid
+ 
+     except Exception as e:
+         err_msg = str(e)
+-        print(f"[❌] AI Anchor Stabilization failed: {err_msg}")
++        print(f"[Γ¥î] AI Anchor Stabilization failed: {err_msg}")
+         # If it fails, return the original video path so the pipeline doesn't break
+         return video_path
+ 
+-# ─────────────────────────────────────────────
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ # AI IMAGE ENHANCER & INVISIBLE WATERMARK REMOVER
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def stage_enhance_ai_image(input_image_path: str) -> str:
+     from playwright.sync_api import sync_playwright
+-    print(f"[⚙️] Bypassing Invisible AI Watermarks via High-Res Screenshot: {input_image_path}")
++    print(f"[ΓÜÖ∩╕Å] Bypassing Invisible AI Watermarks via High-Res Screenshot: {input_image_path}")
+     base, ext = os.path.splitext(input_image_path)
+     output_image_path = f"{base}_hq.jpg"
+ 
+@@ -3667,32 +3667,32 @@
+                     
+             browser.close()
+ 
+-        print(f"[✅] High-Quality Screenshot saved (Watermarks Destroyed): {output_image_path}")
++        print(f"[Γ£à] High-Quality Screenshot saved (Watermarks Destroyed): {output_image_path}")
+         return output_image_path
+     except Exception as e:
+-        print(f"[❌] Image screenshot enhancement failed: {e}")
++        print(f"[Γ¥î] Image screenshot enhancement failed: {e}")
+         return input_image_path
+ 
+ # 14. MAIN PIPELINE ORCHESTRATION
+-# ─────────────────────────────────────────────
++# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+ def run_pipeline(video_path: str, options_json: str) -> None:
+     options = json.loads(options_json)
+-    print(f"\n[🎬] STARTING LOCAL RENDER ENGINE: {os.path.basename(video_path)}\n")
++    print(f"\n[≡ƒÄ¼] STARTING LOCAL RENDER ENGINE: {os.path.basename(video_path)}\n")
+ 
+     if not os.path.exists(video_path):
+-        print(f"[❌] FATAL: Input file not found: {video_path}")
++        print(f"[Γ¥î] FATAL: Input file not found: {video_path}")
+         print("Please re-select the file in the UI.")
+         return
+ 
+     if options.get("enhanceAiImage"):
+-        print("\n[🎬] RUNNING AI IMAGE ENHANCEMENT...")
++        print("\n[≡ƒÄ¼] RUNNING AI IMAGE ENHANCEMENT...")
+         result = stage_enhance_ai_image(video_path)
+-        print(f"\n[🚀] PIPELINE COMPLETE. Final output: {result}")
++        print(f"\n[≡ƒÜÇ] PIPELINE COMPLETE. Final output: {result}")
+         return
+ 
+     if options.get("generatePromptOnly"):
+-        print("\n[🎬] GENERATING SMART PROMPT...")
++        print("\n[≡ƒÄ¼] GENERATING SMART PROMPT...")
+         import subprocess
+         base_dir = os.path.dirname(os.path.abspath(video_path))
+         temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
+@@ -3715,22 +3715,22 @@
+ 1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
+ 2. Break the text into short, logical phrases of exactly 3 to 5 words each.
+ 3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission" , "Grab Me"). 
+-4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").
+-5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්" , "වැඩ").
+-6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
++4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "α╢╗α╖öα╢┤α╖Æα╢║α╢╜α╖è 5000").
++5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct α╖Çα╖Éα╢⌐α╢£α╢▒α╖èα╢▒", "α╢╢α╖Åα╖âα╖è" , "α╖Çα╖Éα╢⌐").
++6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, α╢╢α╖Åα╖âα╖è.
+ 7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.
+ 8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:
+    - THE HOOK: The very first attention-grabbing statement or question.
+-   - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").
++   - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "α╢╜α╖£α╢Üα╖öα╢╕ scam α╢æα╢Üα╢Üα╖è |").
+    - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.
+    DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.
+ 
+ You must provide the approximate start and end times for each phrase in seconds.
+ Output strictly as a JSON array. Example:
+ [
+-  {{"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2}},
+-  {{"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2}},
+-  {{"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}}
++  {{"phrase": "α╢öα╢║α╖Åα╢£α╖Öα╢¡α╖è leak α╖Çα╖Öα╢▒α╖Çα╢» |", "start": 0.1, "end": 1.2}},
++  {{"phrase": "α╢öα╖Çα╖è α╢╕α╢é α╢╕α╖Ü α╢Üα╖Æα╢║α╢▒α╖èα╢▒α╖Ü", "start": 1.3, "end": 2.2}},
++  {{"phrase": "α╢╗α╖öα╢┤α╖Æα╢║α╢╜α╖è 5000α╢Üα╖è α╢▒α╖Æα╢Üα╢▒α╖èα╢╕ |", "start": 2.3, "end": 3.5}}
+ ]
+ Do not include any markdown formatting. Just the raw JSON array."""
+ 
+@@ -3803,11 +3803,11 @@
+         else:
+             export_captions_overlay_en(current_video, options)
+ 
+-    print(f"\n[🚀] PIPELINE COMPLETE. Final output: {current_video}")
++    print(f"\n[≡ƒÜÇ] PIPELINE COMPLETE. Final output: {current_video}")
+ 
+ 
+ if __name__ == "__main__":
+     if len(sys.argv) > 2:
+         run_pipeline(sys.argv[1], sys.argv[2])
+     else:
+-        print("Usage: pipeline.py <video_path> <options_json>")+        print("Usage: pipeline.py <video_path> <options_json>")

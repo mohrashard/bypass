@@ -1,0 +1,49 @@
+Line 44: textBehind: string;
+Line 67: { id: 'scene-0', timestamp: 0.0, bgImagePath: '', bgImageName: '', textBehind: '', textY: 50, textSize: 100, textAnimation: 'slide-up' }
+Line 149: textBehindSubject: false,
+Line 205: bgMode: scene.bgImagePath ? 'image' : 'color',
+Line 206: bgImagePath: scene.bgImagePath || '',
+Line 207: bgScale: scene.bgScale ?? 100,
+Line 208: subjectScale: scene.subjectScale ?? 100,
+Line 209: subjectY: scene.subjectY ?? 0,
+Line 330: const newScene: SceneConfig = { id: `scene-${Date.now()}`, timestamp: time, bgImagePath: '', bgImageName: '', textBehind: '', textY: 50, textSize: 100, textAnimation: 'slide-up' };
+Line 335: setSelectedSceneId(newScene.id);
+Line 461: // Automatically enable background/sandwich FX if timeline is being used
+Line 463: const hasTimelineText = timelineScenes.some(s => s.textBehind !== '');
+Line 470: textBehindSubject: options.textBehindSubject || hasTimelineText,
+Line 553: setTimelineScenes([{ id: 'scene-0', timestamp: 0.0, bgImagePath: '', bgImageName: '', textBehind: '', textY: 50, textSize: 100, textAnimation: 'slide-up' }]);
+Line 589: const widthPercent = Math.max(0, ((nextTime - scene.timestamp) / videoDuration) * 100);
+Line 590: const isSelected = selectedSceneId === scene.id;
+Line 593: key={scene.id}
+Line 594: onClick={() => setSelectedSceneId(scene.id)}
+Line 648: <button onClick={() => handleSelectSceneBg(scene.id)} className="bg-zinc-800 border border-zinc-700 hover:border-zinc-500 rounded p-4 flex flex-col items-center justify-center min-h-[80px]">
+Line 649: {scene.bgImagePath ? (
+Line 651: <span className="text-xs text-emerald-400 font-medium truncate w-full">{scene.bgImageName}</span>
+Line 661: <input type="range" min="100" max="250" value={scene.bgScale ?? 100} onChange={(e) => updateScene(scene.id, { bgScale: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500" />
+Line 662: <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{scene.bgScale ?? 100}%</span>
+Line 666: <input type="range" min="30" max="150" value={scene.subjectScale ?? 100} onChange={(e) => updateScene(scene.id, { subjectScale: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+Line 667: <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{scene.subjectScale ?? 100}%</span>
+Line 671: <input type="range" min="-100" max="100" value={scene.subjectY ?? 0} onChange={(e) => updateScene(scene.id, { subjectY: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+Line 672: <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{(scene.subjectY ?? 0) > 0 ? '+' : ''}{scene.subjectY ?? 0}%</span>
+Line 676: onClick={() => updateScene(scene.id, { bgScale: 100, subjectScale: 100, subjectY: 0 })}
+Line 681: onClick={() => handleLivePreview(scene.id)}
+Line 692: <span className="text-xs font-bold text-zinc-400">SANDWICH TEXT (TEXT BEHIND SUBJECT)</span>
+Line 697: textY: scene.textY,
+Line 698: textSize: scene.textSize,
+Line 699: bgScale: scene.bgScale,
+Line 700: subjectScale: scene.subjectScale,
+Line 701: subjectY: scene.subjectY
+Line 712: value={scene.textBehind}
+Line 713: onChange={(e) => updateScene(scene.id, { textBehind: e.target.value })}
+Line 719: <input type="range" min="0" max="100" value={scene.textY ?? 50} onChange={(e) => updateScene(scene.id, { textY: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+Line 720: <span className="text-[10px] text-zinc-500 w-6 text-right font-mono">{scene.textY ?? 50}%</span>
+Line 724: <input type="range" min="50" max="250" value={scene.textSize ?? 100} onChange={(e) => updateScene(scene.id, { textSize: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+Line 725: <span className="text-[10px] text-zinc-500 w-6 text-right font-mono">{scene.textSize ?? 100}%</span>
+Line 739: style={{ top: `${scene.textY ?? 50}%`, transform: 'translateY(-50%)' }}
+Line 744: fontSize: `${(scene.textSize ?? 100) * 0.28}px`,
+Line 749: {scene.textBehind || 'SANDWICH'}
+Line 951: <span>🍔</span> Text Behind Subject
+Line 955: checked={options.textBehindSubject}
+Line 956: onChange={(e) => setOptions(prev => ({...prev, textBehindSubject: e.target.checked}))}
+Line 1370: <span className="text-[10px] text-zinc-500">Places text behind the subject</span>
+Line 1778: disabled={!selectedFilePath || (activeCount === 0 && timelineScenes.length <= 1 && timelineScenes.every(s => !s.bgImagePath && !s.textBehind))}

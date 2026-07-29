@@ -1,0 +1,15 @@
+1831:             raise
+1832: 
+1833:         for f in [temp_audio]:
+1834:             if os.path.exists(f): os.remove(f)
+1835: 
+1836:         print(f"[✅] Background FX applied: {output_vid}")
+1837: 
+1838:         : {output_vid}")
+1839:         return output_vid
+1840: 
+1841: 
+1842:     # ── WebGL GPU Soft Key Path (Playwright) ──────────────────────────────
+1843:     elif keying_mode == "webgl":
+1844:         print("[🌐] Booting WebGL Browser Engine for Cinematic Soft Keying...")
+1845:         from playwright.sync_api import sync_playwright

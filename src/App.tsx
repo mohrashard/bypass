@@ -20,13 +20,14 @@ const OPTIONS_META: Record<string, string> = {
   extractMp3: '🎵 Extract MP3 Audio',
   mergeEngine: '🔄 Audio Merger Engine',
   removeSilence: '✂️ Remove Dead Air',
-  stabilizerEngine: '⚖️ Video Stabilizer Engine', // 👈 NEW: Stabilizer Engine
+  stabilizerEngine: '⚖️ Video Stabilizer Engine',
   hookEngine: '🎣 0-Second Hook Engine',
   burnCaptions: '📝 Burn Viral Captions',
   studioAudio: '🎙️ Studio Audio Enhancer',
   maskEngine: '🎭 Video Masking Engine',
   blurBackground: '🌫️ AI Background FX',
   autoZoom: '🧠 Semantic Smart-Zooms',
+  motionTracking: '🎯 Dynamic Motion Tracking',
   makeVertical: '📱 Face-Tracking Vertical',
   cinematicColor: '🎨 Cinematic Color Grade',
   applyBeautyFilter: '✨ Custom Beauty Filter',
@@ -34,6 +35,20 @@ const OPTIONS_META: Record<string, string> = {
   autoTransitions: '✨ Auto Sentence Transitions',
   enhanceAiImage: '🖼️ AI Image Watermark Remover',
 };
+
+export interface SceneConfig {
+  id: string;
+  timestamp: number;
+  bgImagePath: string;
+  bgImageName: string;
+  textBehind: string;
+  textY?: number;
+  textSize?: number;
+  textAnimation?: string;
+  bgScale?: number;
+  subjectScale?: number;
+  subjectY?: number;
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'utility' | 'nexus' | 'lead'>('utility');
@@ -47,6 +62,13 @@ export default function App() {
 
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+
+  const [timelineScenes, setTimelineScenes] = useState<SceneConfig[]>([
+    { id: 'scene-0', timestamp: 0.0, bgImagePath: '', bgImageName: '', textBehind: '', textY: 50, textSize: 100, textAnimation: 'slide-up' }
+  ]);
+  const [selectedSceneId, setSelectedSceneId] = useState<string>('scene-0');
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoDuration, setVideoDuration] = useState(1);
 
   const [options, setOptions] = useState({
     enhanceAiImage: false,
@@ -90,6 +112,7 @@ export default function App() {
     studioAudio: false,
     blurBackground: false,
     autoZoom: false,
+    motionTracking: false,
     zoomIntensity: 1.15,
     zoomSpeed: 0.5,
     makeVertical: false,
@@ -122,10 +145,15 @@ export default function App() {
     bgColor: '#09090b',
     bgImagePath: '',
     bgImageName: '',
+    bgImagePaths: [] as string[],
+    textBehindSubject: false,
+    sceneTransition: false,
+    parallaxDrift: false,
+    autoSfx: false,
     bgScale: 100,
     subjectScale: 100,
     subjectY: 0,
-    keyingMode: 'ai',
+    keyingMode: 'chroma',
     colorGradeStyle: 'pro-max',
   });
 
@@ -159,17 +187,36 @@ export default function App() {
     }
   };
 
-  const handleLivePreview = async () => {
+  const handleLivePreview = async (sceneId?: string) => {
     if (!selectedFilePath) {
       alert("Please select a video file first");
       return;
     }
+    
+    // Default to global options
+    let previewOptions = { ...options };
+    
+    // If a scene is provided, override with scene-specific values
+    if (sceneId) {
+      const scene = timelineScenes.find(s => s.id === sceneId);
+      if (scene) {
+        previewOptions = {
+          ...previewOptions,
+          bgMode: scene.bgImagePath ? 'image' : 'color',
+          bgImagePath: scene.bgImagePath || '',
+          bgScale: scene.bgScale ?? 100,
+          subjectScale: scene.subjectScale ?? 100,
+          subjectY: scene.subjectY ?? 0,
+        };
+      }
+    }
+    
     try {
       setIsPreviewLoading(true);
       const out = await invoke<string>('run_python_engine', {
         videoPath: selectedFilePath,
         processType: 'preview_engine',
-        optionsJson: JSON.stringify(options),
+        optionsJson: JSON.stringify(previewOptions),
       });
       const match = out.match(/\[PREVIEW_READY\] (.*)/);
       if (match && match[1]) {
@@ -195,14 +242,17 @@ export default function App() {
 
   const handleSelectBgImage = async () => {
     const selected = await open({
-      multiple: false,
+      multiple: true,
       filters: [{ name: 'Image', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
     }).catch(() => null);
-    if (selected && typeof selected === 'string') {
+    
+    if (selected) {
+      const paths = Array.isArray(selected) ? selected : [selected];
       setOptions((prev) => ({
         ...prev,
-        bgImagePath: selected,
-        bgImageName: selected.split(/[\\/]/).pop() ?? 'image.jpg',
+        bgImagePaths: paths,
+        bgImagePath: paths[0],
+        bgImageName: paths[0].split(/[\\/]/).pop() ?? 'image.jpg',
       }));
     }
   };
@@ -274,22 +324,166 @@ export default function App() {
     }
   };
 
-  const handleRunPipeline = async () => {
+  const handleSplit = () => {
+    if (videoRef.current) {
+      const time = videoRef.current.currentTime;
+      const newScene: SceneConfig = { id: `scene-${Date.now()}`, timestamp: time, bgImagePath: '', bgImageName: '', textBehind: '', textY: 50, textSize: 100, textAnimation: 'slide-up' };
+      setTimelineScenes(prev => {
+        const updated = [...prev, newScene].sort((a, b) => a.timestamp - b.timestamp);
+        return updated;
+      });
+      setSelectedSceneId(newScene.id);
+    }
+  };
+
+  const handleUndoSplit = () => {
+    setTimelineScenes(prev => {
+      if (prev.length <= 1) return prev;
+      const updated = [...prev];
+      updated.pop();
+      if (selectedSceneId === updated[updated.length - 1]?.id || !updated.find(s => s.id === selectedSceneId)) {
+        setSelectedSceneId(updated[updated.length - 1].id);
+      }
+      return updated;
+    });
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in an input field
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (videoRef.current) {
+          if (videoRef.current.paused) {
+            videoRef.current.play();
+          } else {
+            videoRef.current.pause();
+          }
+        }
+      } else if (e.key.toLowerCase() === 'x') {
+        e.preventDefault();
+        handleSplit();
+      } else if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) {
+        // Bonus: Ctrl+Z for undo
+        e.preventDefault();
+        handleUndoSplit();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (videoRef.current) {
+          videoRef.current.pause();
+          videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 0.0333);
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (videoRef.current) {
+          videoRef.current.pause();
+          videoRef.current.currentTime = Math.min(videoRef.current.duration, videoRef.current.currentTime + 0.0333);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const updateScene = (id: string, updates: Partial<SceneConfig>) => {
+    setTimelineScenes(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+  };
+
+  const handleSelectSceneBg = async (sceneId: string) => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: 'Image', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
+    }).catch(() => null);
+    
+    if (selected && typeof selected === 'string') {
+      updateScene(sceneId, {
+        bgImagePath: selected,
+        bgImageName: selected.split(/[\\/]/).pop() ?? 'image.jpg',
+      });
+    }
+  };
+
+  const handlePreProcess = async () => {
     if (!selectedFilePath || isProcessing) return;
     setIsProcessing(true);
-    setTerminalLines(['Initializing Python Engine...']);
+    setTerminalLines(['Starting Pre-Processing (Audio Merge + Dead Air Removal)...']);
+    try {
+      const output = await invoke<string>('run_python_engine', {
+        videoPath: selectedFilePath,
+        processType: 'pipeline',
+        optionsJson: JSON.stringify({ 
+          ...options, 
+          preProcessOnly: true,
+          removeSilence: true,
+          mergeEngine: !!options.mergeAudioPath
+        }),
+      });
+      const match = output.match(/Final output: (.+)/);
+      if (match && match[1]) {
+        const newPath = match[1].trim();
+        setSelectedFilePath(newPath);
+        setSelectedFileName(newPath.split(/[\\/]/).pop() || '');
+        setTerminalLines((prev) => [...prev, '', `✅ Pre-Processing Complete! Loaded into timeline.`]);
+      }
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleExtractMp3 = async () => {
+    if (!selectedFilePath || isProcessing) return;
+    setIsProcessing(true);
+    setTerminalLines(['Extracting Raw MP3...']);
     try {
       await invoke<string>('run_python_engine', {
         videoPath: selectedFilePath,
         processType: 'pipeline',
-        optionsJson: JSON.stringify(options),
+        optionsJson: JSON.stringify({ extractMp3Only: true }),
+      });
+      setTerminalLines((prev) => [...prev, '', `✅ Raw MP3 Extracted!`]);
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRunPipeline = async () => {
+    if (!selectedFilePath || isProcessing) return;
+    setIsProcessing(true);
+    setTerminalLines(['Initializing Python Engine...']);
+    
+    // Automatically enable background/sandwich FX if timeline is being used
+    const hasTimelineBg = timelineScenes.some(s => s.bgImagePath !== '');
+    const hasTimelineText = timelineScenes.some(s => s.textBehind !== '');
+    const hasTimelineCuts = timelineScenes.length > 1;
+    
+    const finalOptions = {
+      ...options,
+      timelineScenes,
+      blurBackground: options.blurBackground || hasTimelineBg,
+      textBehindSubject: options.textBehindSubject || hasTimelineText,
+      sceneTransition: options.sceneTransition || hasTimelineCuts,
+      autoSfx: options.autoSfx || hasTimelineCuts
+    };
+    
+    try {
+      await invoke<string>('run_python_engine', {
+        videoPath: selectedFilePath,
+        processType: 'pipeline',
+        optionsJson: JSON.stringify(finalOptions),
       });
     } catch (error) {
       const errorStr = String(error);
-      if (errorStr.includes("terminated") || errorStr.includes("exited with code")) {
+      if (errorStr.includes("terminated")) {
         setTerminalLines((prev) => [...prev, '', `🛑 RENDER CANCELLED BY USER.`]);
       } else {
-        setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${errorStr}`]);
+        setTerminalLines((prev) => [...prev, '', `❌ FATAL CRASH: ${errorStr}`]);
       }
     } finally {
       setIsProcessing(false);
@@ -337,21 +531,252 @@ export default function App() {
               <p className="text-zinc-400 text-sm">Zero timeline. 100% local processing.</p>
             </div>
 
-            <div onClick={handleSelectFile}
-              className={`border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer transition-colors ${selectedFilePath
-                ? 'border-emerald-500 bg-emerald-500/10'
-                : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500 hover:bg-zinc-800'}`}>
+            <div className="flex flex-col gap-3">
               {selectedFilePath ? (
-                <div className="text-center space-y-1">
-                  <span className="text-4xl">🎬</span>
-                  <p className="font-semibold text-emerald-400">{selectedFileName}</p>
-                  <p className="text-[11px] text-zinc-500 font-mono mt-1 break-all max-w-md">{selectedFilePath}</p>
+                <div className="flex flex-col gap-3">
+                  <div className="flex gap-3">
+                    <div className="flex-1 bg-zinc-900 border border-zinc-700 rounded-xl overflow-hidden flex flex-col">
+                      <video 
+                        ref={videoRef}
+                        src={convertFileSrc(selectedFilePath)} 
+                        controls 
+                        className="w-full h-56 bg-black object-contain"
+                        onLoadedMetadata={(e) => setVideoDuration(e.currentTarget.duration || 1)}
+                      />
+                      <div className="p-3 border-t border-zinc-800 bg-zinc-950 flex flex-col gap-2">
+                        <div className="flex justify-between items-center">
+                            <span className="text-xs font-bold text-zinc-400">TIMELINE SPLITTER</span>
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={() => { 
+                                  setSelectedFilePath(null); 
+                                  setTimelineScenes([{ id: 'scene-0', timestamp: 0.0, bgImagePath: '', bgImageName: '', textBehind: '', textY: 50, textSize: 100, textAnimation: 'slide-up' }]); 
+                                  setSelectedSceneId('scene-0'); 
+                                }} 
+                                className="text-xs bg-red-900/40 hover:bg-red-900 px-3 py-1 rounded text-red-300 font-bold transition-colors"
+                              >
+                                🗑️ Clear Video
+                              </button>
+                              <button onClick={handleUndoSplit} className="text-xs bg-zinc-800 hover:bg-zinc-700 px-3 py-1 rounded text-zinc-300 font-bold transition-colors">
+                                ↩️ Undo
+                              </button>
+                              
+                              <div className="flex gap-1 bg-zinc-900 border border-zinc-700 p-0.5 rounded">
+                                <button 
+                                  onClick={() => { if(videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime -= 0.0333; } }} 
+                                  className="text-[10px] bg-zinc-800 hover:bg-zinc-700 px-2 py-1 rounded text-zinc-300 font-bold transition-colors shadow-sm"
+                                  title="Previous Frame (Left Arrow)"
+                                >
+                                  ◀
+                                </button>
+                                <button 
+                                  onClick={() => { if(videoRef.current) { videoRef.current.pause(); videoRef.current.currentTime += 0.0333; } }} 
+                                  className="text-[10px] bg-zinc-800 hover:bg-zinc-700 px-2 py-1 rounded text-zinc-300 font-bold transition-colors shadow-sm"
+                                  title="Next Frame (Right Arrow)"
+                                >
+                                  ▶
+                                </button>
+                              </div>
+
+                              <button onClick={handleSplit} className="text-xs bg-emerald-600 hover:bg-emerald-500 px-3 py-1 rounded text-white font-bold flex items-center gap-1 transition-colors">
+                                <span>✂️</span> Split at Playhead
+                              </button>
+                            </div>
+                        </div>
+                        <div className="relative h-8 bg-zinc-800 rounded overflow-hidden flex">
+                            {timelineScenes.map((scene, idx) => {
+                              const nextTime = idx < timelineScenes.length - 1 ? timelineScenes[idx+1].timestamp : videoDuration;
+                              const widthPercent = Math.max(0, ((nextTime - scene.timestamp) / videoDuration) * 100);
+                              const isSelected = selectedSceneId === scene.id;
+                              return (
+                                <div 
+                                  key={scene.id} 
+                                  onClick={() => setSelectedSceneId(scene.id)}
+                                  className={`h-full border-r border-zinc-900 cursor-pointer transition-colors flex items-center justify-center ${isSelected ? 'bg-purple-600' : 'bg-zinc-600 hover:bg-zinc-500'}`}
+                                  style={{ width: `${widthPercent}%` }}
+                                >
+                                    <span className="text-[10px] font-mono font-bold">{idx + 1}</span>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="w-1/3 flex flex-col gap-3">
+                      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 flex flex-col justify-center items-center text-center">
+                        <span className="text-xl mb-1">🎵</span>
+                        <h3 className="text-xs font-bold text-zinc-300 mb-1">Step 1: Extract MP3</h3>
+                        <button 
+                          onClick={handleExtractMp3}
+                          disabled={isProcessing}
+                          className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-600 text-[10px] font-bold py-1.5 px-2 rounded transition-colors disabled:opacity-50 mt-1">
+                          Export Raw Audio
+                        </button>
+                      </div>
+                      <div className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-col justify-center items-center text-center">
+                        <span className="text-2xl mb-1">✂️</span>
+                        <h3 className="text-sm font-bold text-zinc-300 mb-2">Step 2: Pre-Process</h3>
+                        
+                        <button
+                          onClick={handleSelectMergeAudio}
+                          className="w-full mb-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-600 text-[10px] font-bold py-1.5 px-2 rounded transition-colors truncate"
+                        >
+                          {options.mergeAudioName ? `✅ ${options.mergeAudioName}` : '1. Upload Adobe Audio'}
+                        </button>
+                        
+                        <button 
+                          onClick={handlePreProcess}
+                          disabled={isProcessing}
+                          className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
+                          2. Clean & Merge Now
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Selected Scene Settings Panel */}
+                  {selectedSceneId && (
+                    <div className="bg-zinc-900 border border-purple-500/50 rounded-xl p-4 flex gap-4">
+                      {(() => {
+                        const scene = timelineScenes.find(s => s.id === selectedSceneId);
+                        if (!scene) return null;
+                        const idx = timelineScenes.findIndex(s => s.id === selectedSceneId) + 1;
+                        return (
+                          <>
+                            <div className="flex flex-col gap-2 w-1/2">
+                              <span className="text-xs font-bold text-zinc-400">SCENE {idx} BACKGROUND</span>
+                              <button onClick={() => handleSelectSceneBg(scene.id)} className="bg-zinc-800 border border-zinc-700 hover:border-zinc-500 rounded p-4 flex flex-col items-center justify-center min-h-[80px]">
+                                {scene.bgImagePath ? (
+                                  <div className="bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-700">
+                                    <span className="text-xs text-emerald-400 font-medium truncate w-full">{scene.bgImageName}</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-zinc-500 flex flex-col items-center gap-1"><span className="text-lg">🖼️</span> Upload BG</span>
+                                )}
+                              </button>
+
+                              <div className="flex flex-col gap-2 mt-2 pt-2 border-t border-zinc-800/50">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] text-zinc-500 font-bold min-w-[60px]">BG ZOOM</span>
+                                  <input type="range" min="100" max="250" value={scene.bgScale ?? 100} onChange={(e) => updateScene(scene.id, { bgScale: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500" />
+                                  <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{scene.bgScale ?? 100}%</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] text-zinc-500 font-bold min-w-[60px]">SUBJ SIZE</span>
+                                  <input type="range" min="30" max="150" value={scene.subjectScale ?? 100} onChange={(e) => updateScene(scene.id, { subjectScale: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+                                  <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{scene.subjectScale ?? 100}%</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] text-zinc-500 font-bold min-w-[60px]">SUBJ Y-POS</span>
+                                  <input type="range" min="-100" max="100" value={scene.subjectY ?? 0} onChange={(e) => updateScene(scene.id, { subjectY: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+                                  <span className="text-[10px] text-zinc-500 w-8 text-right font-mono">{(scene.subjectY ?? 0) > 0 ? '+' : ''}{scene.subjectY ?? 0}%</span>
+                                </div>
+                                <div className="flex gap-2 mt-1">
+                                  <button 
+                                    onClick={() => updateScene(scene.id, { bgScale: 100, subjectScale: 100, subjectY: 0 })}
+                                    className="text-[10px] uppercase font-bold tracking-wider py-1.5 px-3 bg-zinc-800/50 hover:bg-zinc-700/50 text-zinc-400 hover:text-zinc-300 rounded border border-zinc-800/80 transition-colors w-1/3">
+                                    Reset
+                                  </button>
+                                  <button 
+                                    onClick={() => handleLivePreview(scene.id)} 
+                                    disabled={isPreviewLoading}
+                                    className="text-[10px] uppercase font-bold tracking-wider py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded border border-zinc-700 flex-1 disabled:opacity-50 transition-colors">
+                                    {isPreviewLoading ? 'Generating...' : 'Load Live Preview Frame'}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col gap-2 flex-1 relative">
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs font-bold text-zinc-400">SANDWICH TEXT (TEXT BEHIND SUBJECT)</span>
+                                <button 
+                                  onClick={() => {
+                                    setTimelineScenes(prev => prev.map(s => ({
+                                      ...s,
+                                      textY: scene.textY,
+                                      textSize: scene.textSize,
+                                      bgScale: scene.bgScale,
+                                      subjectScale: scene.subjectScale,
+                                      subjectY: scene.subjectY
+                                    })));
+                                  }}
+                                  className="text-[10px] bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 border border-purple-500/30 px-2 py-0.5 rounded transition-colors uppercase font-bold"
+                                >
+                                  Apply to All
+                                </button>
+                              </div>
+                              <input 
+                                type="text" 
+                                placeholder="Enter text to slide up..." 
+                                value={scene.textBehind}
+                                onChange={(e) => updateScene(scene.id, { textBehind: e.target.value })}
+                                className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm outline-none focus:border-purple-500 text-white"
+                              />
+                              <div className="flex gap-4 items-center">
+                                <div className="flex items-center gap-2 flex-1">
+                                  <span className="text-[10px] text-zinc-500 font-bold min-w-[30px]">POS Y</span>
+                                  <input type="range" min="0" max="100" value={scene.textY ?? 50} onChange={(e) => updateScene(scene.id, { textY: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+                                  <span className="text-[10px] text-zinc-500 w-6 text-right font-mono">{scene.textY ?? 50}%</span>
+                                </div>
+                                <div className="flex items-center gap-2 flex-1">
+                                  <span className="text-[10px] text-zinc-500 font-bold min-w-[30px]">SIZE</span>
+                                  <input type="range" min="50" max="250" value={scene.textSize ?? 100} onChange={(e) => updateScene(scene.id, { textSize: parseInt(e.target.value) })} className="flex-1 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-500" />
+                                  <span className="text-[10px] text-zinc-500 w-6 text-right font-mono">{scene.textSize ?? 100}%</span>
+                                </div>
+                              </div>
+                              
+                              <div className="relative bg-black rounded-lg overflow-hidden border border-zinc-700 pointer-events-none mt-2 mx-auto" style={{ width: '200px', height: '355px' }}>
+                                {previewSrc ? (
+                                  <img src={previewSrc} className="w-full h-full object-cover" />
+                                ) : selectedFilePath ? (
+                                  <video src={convertFileSrc(selectedFilePath)} className="w-full h-full object-cover opacity-60" preload="auto" muted playsInline onLoadedMetadata={(e) => { e.currentTarget.currentTime = 2.0; }} />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-zinc-600"><span className="text-[10px] uppercase font-semibold">No Video</span></div>
+                                )}
+                                <div
+                                  className="absolute left-0 right-0 flex justify-center w-full transition-all duration-75"
+                                  style={{ top: `${scene.textY ?? 50}%`, transform: 'translateY(-50%)' }}
+                                >
+                                  <div 
+                                    className="text-white font-bold uppercase tracking-widest text-center" 
+                                    style={{ 
+                                      fontSize: `${(scene.textSize ?? 100) * 0.28}px`,
+                                      textShadow: '0 2px 4px rgba(0,0,0,0.8), 0 0 10px rgba(0,0,0,0.5)',
+                                      fontFamily: 'Impact, sans-serif'
+                                    }}
+                                  >
+                                    {scene.textBehind || 'SANDWICH'}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  <div className="flex justify-between items-center bg-zinc-900 border border-zinc-800 p-2 rounded-lg mt-2">
+                    <span className="text-xs text-zinc-400 font-bold ml-2">SUBJECT EXTRACTION (GREEN SCREEN)</span>
+                    <select
+                      value={options.keyingMode}
+                      onChange={(e) => setOptions(prev => ({...prev, keyingMode: e.target.value}))}
+                      className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-purple-500"
+                    >
+                      <option value="chroma">FFmpeg Chroma Key (Best for Green Screen)</option>
+                      <option value="ai">MediaPipe AI (No Green Screen needed)</option>
+                    </select>
+                  </div>
                 </div>
               ) : (
-                <div className="text-center space-y-2">
-                  <span className="text-4xl">📁</span>
-                  <p className="font-medium">Click to select your raw video or image</p>
-                  <p className="text-sm text-zinc-500">MP4, MOV, MKV, WEBM, JPG, PNG, WEBP</p>
+                <div onClick={handleSelectFile}
+                  className="w-full border-2 border-dashed border-zinc-700 bg-zinc-900 hover:border-zinc-500 hover:bg-zinc-800 rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer transition-colors">
+                  <div className="text-center space-y-2">
+                    <span className="text-4xl">📁</span>
+                    <p className="font-medium">Click to select your raw video or image</p>
+                    <p className="text-sm text-zinc-500">MP4, MOV, MKV, WEBM, JPG, PNG, WEBP</p>
+                  </div>
                 </div>
               )}
             </div>
@@ -519,6 +944,61 @@ export default function App() {
                             <option value="webgl">🌐 WebGL Soft Key (GPU)</option>
                           </select>
                         </div>
+                        
+                        <div className="flex flex-col gap-2 pb-2 mb-2 border-b border-zinc-800/50">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-zinc-400 font-medium tracking-wide flex items-center gap-2">
+                              <span>🍔</span> Text Behind Subject
+                            </span>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                              <input type="checkbox" className="sr-only peer"
+                                checked={options.textBehindSubject}
+                                onChange={(e) => setOptions(prev => ({...prev, textBehindSubject: e.target.checked}))}
+                              />
+                              <div className="w-8 h-4 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-500"></div>
+                            </label>
+                          </div>
+                          
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-zinc-400 font-medium tracking-wide flex items-center gap-2">
+                              <span>🎬</span> CapCut Scene Slide
+                            </span>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                              <input type="checkbox" className="sr-only peer"
+                                checked={options.sceneTransition}
+                                onChange={(e) => setOptions(prev => ({...prev, sceneTransition: e.target.checked}))}
+                              />
+                              <div className="w-8 h-4 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-500"></div>
+                            </label>
+                          </div>
+                          
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-zinc-400 font-medium tracking-wide flex items-center gap-2">
+                              <span>🌌</span> 3D Parallax Drift
+                            </span>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                              <input type="checkbox" className="sr-only peer"
+                                checked={options.parallaxDrift}
+                                onChange={(e) => setOptions(prev => ({...prev, parallaxDrift: e.target.checked}))}
+                              />
+                              <div className="w-8 h-4 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-500"></div>
+                            </label>
+                          </div>
+                          
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-zinc-400 font-medium tracking-wide flex items-center gap-2">
+                              <span>🔊</span> Auto-SFX Engine
+                            </span>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                              <input type="checkbox" className="sr-only peer"
+                                checked={options.autoSfx}
+                                onChange={(e) => setOptions(prev => ({...prev, autoSfx: e.target.checked}))}
+                              />
+                              <div className="w-8 h-4 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-500"></div>
+                            </label>
+                          </div>
+                        </div>
+
                         <div className="flex items-center justify-between">
                           <span className="text-xs text-zinc-400 font-medium">FX Mode</span>
                           <select value={options.bgMode}
@@ -539,14 +1019,26 @@ export default function App() {
                         )}
                         {options.bgMode === 'image' && (
                           <div className="flex flex-col gap-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs text-zinc-400 font-medium">Background File</span>
-                              <button onClick={handleSelectBgImage}
-                                className={`text-xs px-3 py-1.5 rounded border transition-colors max-w-[140px] truncate ${options.bgImagePath
-                                  ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-400'
-                                  : 'bg-zinc-950 border-zinc-700 hover:border-zinc-500 text-zinc-300'}`}>
-                                {options.bgImageName || 'Choose Image...'}
-                              </button>
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-zinc-400 font-medium">Background Playlist</span>
+                                <button onClick={handleSelectBgImage}
+                                  className={`text-xs px-3 py-1.5 rounded border transition-colors ${options.bgImagePaths && options.bgImagePaths.length > 0
+                                    ? 'bg-emerald-950/50 border-emerald-700/50 text-emerald-400'
+                                    : 'bg-zinc-950 border-zinc-700 hover:border-zinc-500 text-zinc-300'}`}>
+                                  {options.bgImagePaths && options.bgImagePaths.length > 0 ? `${options.bgImagePaths.length} Images Selected` : 'Choose Images...'}
+                                </button>
+                              </div>
+                              {options.bgImagePaths && options.bgImagePaths.length > 0 && (
+                                <div className="flex flex-col gap-1 p-2 bg-zinc-950 border border-zinc-800 rounded">
+                                  {options.bgImagePaths.map((p, idx) => (
+                                    <div key={idx} className="flex justify-between items-center text-[10px] text-zinc-400 font-mono">
+                                      <span>Scene {idx + 1}</span>
+                                      <span className="truncate max-w-[120px]">{p.split(/[\\/]/).pop()}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                             
                             <div className="flex flex-col gap-2 pt-2 border-t border-zinc-800/50 mt-1">
@@ -572,7 +1064,7 @@ export default function App() {
                                   Reset
                                 </button>
                                 <button 
-                                  onClick={handleLivePreview} 
+                                  onClick={() => handleLivePreview()} 
                                   disabled={isPreviewLoading}
                                   className="text-[10px] uppercase font-bold tracking-wider py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded border border-zinc-700 flex-1 disabled:opacity-50 transition-colors">
                                   {isPreviewLoading ? 'Generating...' : 'Load Live Preview Frame'}
@@ -1283,7 +1775,7 @@ export default function App() {
               </div>
             ) : (
               <button onClick={handleRunPipeline}
-                disabled={!selectedFilePath || activeCount === 0}
+                disabled={!selectedFilePath || (activeCount === 0 && timelineScenes.length <= 1 && timelineScenes.every(s => !s.bgImagePath && !s.textBehind))}
                 className="w-full py-4 rounded-xl font-bold text-base bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] shadow-[0_0_20px_rgba(5,150,105,0.35)] disabled:opacity-40 disabled:cursor-not-allowed transition-all">
                 RENDER VIDEO
               </button>

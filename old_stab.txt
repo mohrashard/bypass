@@ -1,0 +1,82 @@
+def stage_fast_stabilize(video_path: str, options: dict) -> str:
+    import os
+    import subprocess
+    import cv2
+    import numpy as np
+    from scipy.ndimage import gaussian_filter1d, median_filter
+    import urllib.request
+
+    engine_backend = options.get('stabilizerBackend', 'cpu')
+    if engine_backend == 'gpu':
+        print("[ΓÜÖ∩╕Å] Booting AI Facial Anchor Stabilizer (PyTorch GPU Mode) v2...")
+    else:
+        print("[ΓÜÖ∩╕Å] Booting AI Facial Anchor Stabilizer (Micro-Shock Absorber CPU) v2...")
+
+    base_dir = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_stabilized.mp4"
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+
+    try:
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        print(f"[ΓÜÖ∩╕Å] Pass 1: Extracting rigid facial trajectory (multi-point anchor using {engine_backend.upper()})...")
+        raw_x, raw_y = [], []
+        valid_frames = []
+
+        if engine_backend == 'gpu':
+            try:
+                from facenet_pytorch import MTCNN
+                import torch
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                # MTCNN takes RGB images
+                mtcnn = MTCNN(keep_all=False, device=device)
+                
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    # MTCNN runs very fast on GPU even without downscaling, but we downscale slightly just in case
+                    process_w = 640
+                    scale_ratio = process_w / width
+                    process_h = int(height * scale_ratio)
+                    small_frame = cv2.resize(frame, (process_w, process_h), interpolation=cv2.INTER_LINEAR)
+                    rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                    
+                    boxes, probs, landmarks = mtcnn.detect(rgb_frame, landmarks=True)
+                    if landmarks is not None and len(landmarks) > 0:
+                        # landmarks[0] contains 5 points: left eye, right eye, nose, left mouth, right mouth
+                        lm = landmarks[0] 
+                        xs = [p[0] / scale_ratio for p in lm]
+                        ys = [p[1] / scale_ratio for p in lm]
+                        raw_x.append(float(np.mean(xs)))
+                        raw_y.append(float(np.mean(ys)))
+                        valid_frames.append(True)
+                    else:
+                        raw_x.append(np.nan)
+                        raw_y.append(np.nan)
+                        valid_frames.append(False)
+            except ImportError:
+                print("[ΓÜá∩╕Å] facenet-pytorch not installed! Falling back to CPU...")
+                engine_backend = 'cpu' # Fallthrough to CPU below...
+                
+        if engine_backend == 'cpu':
+            import mediapipe as mp
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision
+            
+            # ΓöÇΓöÇΓöÇ Load MediaPipe Face Landmarker ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            model_path = os.path.join(engine_dir, "pretrained_models", "face_landmarker.task")
+            if not os.path.exists(model_path):
+                print("[ΓÜÖ∩╕Å] Downloading MediaPipe Face Landmarker model...")
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                try:
+                    urllib.request.urlretrieve(
+                        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+                        model_path
+                    )
+                except Exception as e:
+                    print
