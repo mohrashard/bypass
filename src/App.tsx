@@ -551,44 +551,42 @@ export default function App() {
     }
   };
 
-  const handleRunPipeline = async () => {
-    if (!selectedFilePath || isProcessing) return;
-    setIsProcessing(true);
-    setTerminalLines(['Initializing Python Engine...']);
-    
-    // Automatically enable background/sandwich FX if timeline is being used
-    const hasTimelineBg = timelineScenes.some(s => s.bgImagePath !== '');
-    const hasTimelineText = timelineScenes.some(s => s.textBehind !== '');
-    const hasTimelineCuts = timelineScenes.length > 1;
-    
-    const finalOptions = {
-      ...options,
-      timelineScenes,
-      removeSilence: options.removeSilence, // Must chop during final render so BGs and Captions map correctly!
-      manualGeminiJson: correctedTranscriptJson.length > 0 ? JSON.stringify(correctedTranscriptJson) : undefined,
-      blurBackground: options.blurBackground || hasTimelineBg || hasTimelineText,
-      textBehindSubject: options.textBehindSubject || hasTimelineText,
-      sceneTransition: options.sceneTransition || hasTimelineCuts,
-      autoSfx: options.autoSfx || hasTimelineCuts
-    };
-    
-    try {
-      await invoke<string>('run_python_engine', {
-        videoPath: selectedFilePath,
-        processType: 'pipeline',
-        optionsJson: JSON.stringify(finalOptions),
-      });
-    } catch (error) {
-      const errorStr = String(error);
-      if (errorStr.includes("terminated")) {
-        setTerminalLines((prev) => [...prev, '', `🛑 RENDER CANCELLED BY USER.`]);
-      } else {
-        setTerminalLines((prev) => [...prev, '', `❌ FATAL CRASH: ${errorStr}`]);
+    const handleRunPipeline = async () => {
+      if (!selectedFilePath || isProcessing) return;
+      setIsProcessing(true);
+      setTerminalLines(['Initializing Python Engine...']);
+      
+      const hasTimelineCuts = timelineScenes.length > 1;
+      
+      const finalOptions = {
+        ...options,
+        timelineScenes,
+        removeSilence: options.removeSilence, 
+        manualGeminiJson: correctedTranscriptJson.length > 0 ? JSON.stringify(correctedTranscriptJson) : undefined,
+        // Respect the user's legacy checkboxes! Do not force them on unless explicitly checked.
+        blurBackground: options.blurBackground,
+        textBehindSubject: options.textBehindSubject,
+        sceneTransition: options.sceneTransition || hasTimelineCuts,
+        autoSfx: options.autoSfx || hasTimelineCuts
+      };
+      
+      try {
+        await invoke<string>('run_python_engine', {
+          videoPath: selectedFilePath,
+          processType: 'pipeline',
+          optionsJson: JSON.stringify(finalOptions),
+        });
+      } catch (error) {
+        const errorStr = String(error);
+        if (errorStr.includes("terminated")) {
+          setTerminalLines((prev) => [...prev, '', `🛑 RENDER CANCELLED BY USER.`]);
+        } else {
+          setTerminalLines((prev) => [...prev, '', `❌ FATAL CRASH: ${errorStr}`]);
+        }
+      } finally {
+        setIsProcessing(false);
       }
-    } finally {
-      setIsProcessing(false);
-    }
-  };
+    };
 
   const handleStopPipeline = async () => {
     try {

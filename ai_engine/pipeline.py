@@ -1753,11 +1753,16 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
 
     bgr_color = tuple(int(hex_color[i:i+2], 16) for i in (4, 2, 0)) if len(hex_color) == 6 else (11, 9, 9)
 
-    subprocess.run(
-        ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le",
-         "-ar", "48000", "-ac", "1", temp_audio, "-y"],
-        check=True, capture_output=True
-    )
+    try:
+        subprocess.run(
+            ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le",
+             "-ar", "48000", "-ac", "1", temp_audio, "-y"],
+            check=True, capture_output=True
+        )
+    except subprocess.CalledProcessError:
+        print("[⚠️] Video has no audio track or extraction failed. Proceeding without audio.")
+        # Create dummy silent audio just in case downstream needs it
+        subprocess.run(["ffmpeg", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "1", "-q:a", "9", "-acodec", "pcm_s16le", temp_audio, "-y"], capture_output=True)
 
     cap  = cv2.VideoCapture(video_path)
     fps  = cap.get(cv2.CAP_PROP_FPS)
@@ -2635,19 +2640,55 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
             cv2.imwrite(out_path, final)
 
     # ── 5. Re-encode to MP4 (Zero Drift) ────────────────────────────────────
-    print("[⚙️] Re-compiling video sequence with original audio...")
-    subprocess.run([
-        "ffmpeg", "-y",
+    print("[⚙️] Re-compiling video sequence with original audio and transition SFX...")
+    
+    engine_dir = os.path.dirname(os.path.abspath(__file__))
+    sfx_audio  = os.path.join(engine_dir, "assets", "fast woosh.mp3")
+    has_sfx = os.path.exists(sfx_audio)
+    
+    inputs = [
         "-framerate", str(FPS),
         "-i", os.path.join(frames_dir, "%06d.jpg"),
-        "-i", video_path,
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-c:a", "copy",
-        "-shortest",
-        output_vid
-    ], check=True, capture_output=True)
-
+        "-i", video_path
+    ]
+    
+    audio_map = "1:a:0"
+    filter_complex_a = ""
+    
+    if has_sfx and flash_times:
+        inputs.extend(["-i", sfx_audio])
+        audio_mix_inputs = "[1:a:0]"
+        for idx, t_start in enumerate(flash_times):
+            aud_out   = f"[sfx_{idx}]"
+            delay_ms  = int(max(0, t_start) * 1000)
+            filter_complex_a += f"[2:a]adelay={delay_ms}|{delay_ms}{aud_out};"
+            audio_mix_inputs += aud_out
+        total_inputs = len(flash_times) + 1
+        filter_complex_a += (
+            f"{audio_mix_inputs}amix=inputs={total_inputs}"
+            f":duration=first:dropout_transition=0:normalize=0[a_final]"
+        )
+        audio_map = "[a_final]"
+        
+    cmd = ["ffmpeg", "-y"] + inputs
+    
+    if has_sfx and flash_times:
+        cmd.extend([
+            "-filter_complex", filter_complex_a, 
+            "-map", "0:v:0", "-map", audio_map, 
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18", 
+            "-c:a", "aac", "-b:a", "192k", 
+            "-shortest", output_vid
+        ])
+    else:
+        cmd.extend([
+            "-map", "0:v:0", "-map", audio_map, 
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18", 
+            "-c:a", "copy", 
+            "-shortest", output_vid
+        ])
+        
+    subprocess.run(cmd, check=True, capture_output=True)
     # Cleanup
     try:
         shutil.rmtree(frames_dir)
@@ -4110,73 +4151,64 @@ Do not include any markdown formatting. Just the raw JSON array."""
     # ─── MAIN PIPELINE SEQUENCE ───────────────────────────────────────────────
     current_video = video_path
 
-    # 1. Stabilize (Rigid Anchor on RAW)
+    # PHASE 1: MERGE, CLEAN, AND STABILIZE
     if options.get("stabilizerEngine"):
         current_video = stage_fast_stabilize(current_video, options)
 
-    # 2. Merge Studio Audio
     if options.get("mergeEngine"):
         current_video = stage_merge_audio(current_video, options)
 
-    # 3. Remove Dead Air / Jump Cuts (MUST chop BEFORE timeline scenes so UI timestamps match perfectly!)
-    if options.get("removeSilence"):
-        current_video = stage_remove_silence(current_video, options)
-
-    # 4. Background FX + Sandwich Text (Based on UI Timeline)
+    # PHASE 2: APPLY BG, SANDWICH TEXTS ETC. (Output to timeline)
     if options.get("blurBackground"):
         current_video = stage_background_fx(current_video, options)
 
-    # 5. Semantic Smart Zoom (Handled in Chopper now)
-    # 6. Hook Engine
     if options.get("hookEngine"):
         if options.get("startingHook") and options.get("startingHook") != "none":
             current_video = stage_starting_hook(current_video, options)
         if options.get("hookPrimaryText") or options.get("hookSecondaryText"):
             current_video = stage_visual_hook(current_video, options)
 
-    # 7. AI B-Roll
     if options.get("aiBroll"):
         current_video = stage_ai_broll(current_video, options)
 
-    # 8. Studio Audio Enhancement
+    if options.get("applyBeautyFilter"):
+        current_video = stage_beauty_filter(current_video, options)
+
     if options.get("studioAudio"):
         current_video = stage_studio_audio(current_video)
 
     if options.get("extractMp3"):
         current_video = stage_mp4_to_mp3(current_video, options)
 
-    # 9. Beauty Filter
-    if options.get("applyBeautyFilter"):
-        current_video = stage_beauty_filter(current_video, options)
-
-    # 10. Captions (Transcribes the ALREADY chopped video, meaning timestamps map perfectly!)
-    if options.get("burnCaptions"):
-        if options.get("captionLanguage") == "si":
-            current_video = stage_burn_sinhala_captions(current_video, options)
-        else:
-            current_video = stage_burn_captions(current_video, options)
-            
-    # 11. Auto Transitions (Elastic Stretch & Flash based on perfectly mapped _flash_times.json)
-    if options.get("autoTransitions"):
-        current_video = stage_scene_transitions(current_video, options)
-
-    # 12. Global Handheld Motion Tracking (Simulates a human operator on the whole scene)
-    if options.get("motionTracking"):
-        current_video = stage_global_motion_tracking(current_video, options)
-
-    # 13. Cinematic Color Grade & M22 Rescue
+    # PHASE 3: COLOR GRADE & BOTTOM GLOW
     if options.get("cinematicColor"):
         current_video = stage_cinematic_color(current_video, options)
     if options.get("cinematicGrade") and options.get("cinematicGrade") != "none":
         current_video = stage_cinematic_grade(current_video, options)
 
-    # 14. Bottom Glow
     if options.get("bottomGlow"):
         color = options.get("glowColor", "#000000")
         current_video = stage_bottom_glow(current_video, color)
 
-    print(f"\\n[🚀] PIPELINE COMPLETE. Final output: {current_video}")
+    # PHASE 4: CHOP -> THEN TRANSCRIBE AND APPLY CAPTION
+    if options.get("removeSilence"):
+        current_video = stage_remove_silence(current_video, options)
 
+    if options.get("burnCaptions"):
+        if options.get("captionLanguage") == "si":
+            current_video = stage_burn_sinhala_captions(current_video, options)
+        else:
+            current_video = stage_burn_captions(current_video, options)
+
+    # PHASE 5: TRANSITIONS
+    if options.get("autoTransitions"):
+        current_video = stage_scene_transitions(current_video, options)
+
+    if options.get("motionTracking"):
+        current_video = stage_global_motion_tracking(current_video, options)
+
+    print(f"\n[🚀] PIPELINE COMPLETE. Final output: {current_video}")
+    return current_video
 
 if __name__ == "__main__":
     import sys
