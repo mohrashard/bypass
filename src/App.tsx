@@ -437,15 +437,15 @@ export default function App() {
       willStabilize ? '1. Stabilize' : null,
       options.mergeAudioPath ? '2. Merge Audio' : null,
     ].filter(Boolean).join(' → ');
-    // Output is streamed via 'engine-stdout' Tauri events.
-    setTerminalLines([`⚙️ Pre-Processing: ${stages}`]);
+    
+    setTerminalLines([`⚙️ Phase 1: ${stages}`]);
     try {
-      await invoke('run_python_engine', {
+      const output: string = await invoke('run_python_engine', {
         videoPath: selectedFilePath,
         processType: 'pipeline',
         optionsJson: JSON.stringify({
           ...options,
-          removeSilence: false, // Wait! We removed this from pre-process!
+          removeSilence: false, 
           mergeEngine: !!options.mergeAudioPath,
           stabilizerEngine: willStabilize,
           blurBackground: false,
@@ -463,6 +463,56 @@ export default function App() {
           enhanceAiImage: false,
         }),
       });
+      
+      const match = output.match(/Final output:\s*(.*)/);
+      if (match && match[1]) {
+        setSelectedFilePath(match[1].trim());
+        setTerminalLines((prev) => [...prev, '', `✅ Merged video loaded into player!`]);
+      }
+    } catch (error) {
+      const errStr = String(error);
+      if (!errStr.includes('terminated')) {
+        setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${errStr}`]);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleChopVideo = async () => {
+    if (!selectedFilePath || isProcessing) return;
+    setIsProcessing(true);
+    setTerminalLines([`⚙️ Phase 2: Chopping Dead Air...`]);
+    try {
+      const output: string = await invoke('run_python_engine', {
+        videoPath: selectedFilePath,
+        processType: 'pipeline',
+        optionsJson: JSON.stringify({
+          ...options,
+          removeSilence: true, // Only chop
+          mergeEngine: false,
+          stabilizerEngine: false,
+          blurBackground: false,
+          burnCaptions: false,
+          cinematicColor: false,
+          cinematicGrade: 'none',
+          bottomGlow: false,
+          hookEngine: false,
+          autoTransitions: false,
+          autoZoom: false,
+          motionTracking: false,
+          studioAudio: false,
+          applyBeautyFilter: false,
+          maskEngine: false,
+          enhanceAiImage: false,
+        }),
+      });
+      
+      const match = output.match(/Final output:\s*(.*)/);
+      if (match && match[1]) {
+        setSelectedFilePath(match[1].trim());
+        setTerminalLines((prev) => [...prev, '', `✅ Chopped fast-paced video loaded into player!`]);
+      }
     } catch (error) {
       const errStr = String(error);
       if (!errStr.includes('terminated')) {
@@ -556,16 +606,21 @@ export default function App() {
       setIsProcessing(true);
       setTerminalLines(['Initializing Python Engine...']);
       
+      const hasTimelineBg = timelineScenes.some(s => s.bgImagePath !== '');
+      const hasTimelineText = timelineScenes.some(s => s.textBehind !== '');
       const hasTimelineCuts = timelineScenes.length > 1;
       
       const finalOptions = {
         ...options,
         timelineScenes,
         removeSilence: options.removeSilence, 
-        manualGeminiJson: correctedTranscriptJson.length > 0 ? JSON.stringify(correctedTranscriptJson) : undefined,
-        // Respect the user's legacy checkboxes! Do not force them on unless explicitly checked.
-        blurBackground: options.blurBackground,
-        textBehindSubject: options.textBehindSubject,
+        manualGeminiJson: correctedTranscriptJson.length > 0 ? JSON.stringify(correctedTranscriptJson) : (rawTranscriptJson.length > 0 ? JSON.stringify(rawTranscriptJson) : undefined),
+        
+        // Auto-enable if timeline has backgrounds or text
+        blurBackground: options.blurBackground || hasTimelineBg || hasTimelineText,
+        textBehindSubject: options.textBehindSubject || hasTimelineText,
+        
+        // Auto-enable transitions if timeline has cuts
         sceneTransition: options.sceneTransition || hasTimelineCuts,
         autoSfx: options.autoSfx || hasTimelineCuts
       };
@@ -730,10 +785,17 @@ export default function App() {
                         </button>
                         
                         <button 
+                          onClick={handleChopVideo}
+                          disabled={isProcessing}
+                          className="w-full mb-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
+                          3. Chop & Load Video
+                        </button>
+
+                        <button 
                           onClick={handleChopAndTranscribe}
                           disabled={isTranscribing}
-                          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
-                          3. Chop & Transcribe
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
+                          4. Transcribe (Temporary)
                         </button>
                       </div>
                     </div>

@@ -13,13 +13,10 @@ def extract_audio(video_path, out_audio):
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def generate_srt(video_path, options):
-    print("\n[🎬] Removing Dead Air Before Transcription...")
-    chopped_video = stage_remove_silence(video_path, options)
-
     print("\n[🎬] Extracting Audio for Whisper...")
-    base_dir = os.path.dirname(os.path.abspath(chopped_video))
+    base_dir = os.path.dirname(os.path.abspath(video_path))
     temp_audio = os.path.join(base_dir, "_temp_whisper_audio.wav")
-    extract_audio(chopped_video, temp_audio)
+    extract_audio(video_path, temp_audio)
 
     print("\n[🤖] Booting Groq Whisper-Large-V3 Model for Perfect Accuracy...")
     try:
@@ -61,7 +58,7 @@ def generate_srt(video_path, options):
         # Print JSON so frontend can capture it
         print("__JSON_START__")
         print(json.dumps({
-            "chopped_video": chopped_video,
+            "chopped_video": video_path,
             "segments": segments
         }))
         print("__JSON_END__")

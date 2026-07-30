@@ -355,18 +355,12 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
         print("[⚙️] Parsing Groq Synced JSON...")
         try:
             segments_data = json.loads(manual_gemini_json)
-            flash_times = []
             
             for i, seg in enumerate(segments_data):
                 phrase = seg.get("phrase", "")
                 if not phrase: continue
                 
-                # Extract director cuts (|) for Auto Transitions
-                if "|" in phrase:
-                    if i + 1 < len(segments_data):
-                        flash_times.append(float(segments_data[i+1].get("start", 0)))
-                        
-                # NEW: Remove | from phrase so it doesn't render on screen
+                # NEW: Remove | from phrase so it doesn't render on screen just in case they used it
                 phrase_clean = phrase.replace("|", "")
                 words = phrase_clean.split()
                 if not words: continue
@@ -382,10 +376,6 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
                         "start": start_t + j * time_per_word,
                         "end": start_t + (j + 1) * time_per_word
                     })
-                    
-            if flash_times:
-                with open(os.path.join(base_dir, "_flash_times.json"), "w") as f:
-                    json.dump(flash_times, f)
                     
         except Exception as e:
             print(f"[❌] FATAL: Invalid Groq JSON: {e}")
@@ -2395,15 +2385,19 @@ def stage_alternating_zoom(video_path: str, options: dict) -> str:
     print("[⚙️] Adding Alternating Camera Angles (Zoom) to Composited Backgrounds...")
     base_dir   = os.path.dirname(os.path.abspath(video_path))
     output_vid = os.path.splitext(video_path)[0] + "_cam_angles.mp4"
-    json_path  = os.path.join(base_dir, "_flash_times.json")
     
     flash_times = []
-    if os.path.exists(json_path):
-        with open(json_path, "r") as f:
-            flash_times = json.load(f)
-            
+    timeline_scenes = options.get("timelineScenes", [])
+    
+    if len(timeline_scenes) > 1:
+        # The first scene is usually at 0.0, we want the subsequent splits
+        for scene in timeline_scenes[1:]:
+            t = float(scene.get("timestamp", 0.0))
+            if t > 0.0:
+                flash_times.append(t)
+                
     if not flash_times:
-        print("[⚙️] No cuts detected. Skipping Alternating Zoom.")
+        print("[⚙️] No cuts detected in timeline. Skipping Alternating Zoom.")
         return video_path
         
     try:
@@ -2506,17 +2500,20 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
     print("[⚙️] Injecting Cinematic 'Flash' Elastic Stretch Transitions...")
     base_dir   = os.path.dirname(os.path.abspath(video_path))
     output_vid = os.path.splitext(video_path)[0] + "_transitions.mp4"
-    json_path  = os.path.join(base_dir, "_flash_times.json")
     frames_dir = os.path.join(base_dir, "_trans_frames")
 
     flash_times = []
-    if os.path.exists(json_path):
-        with open(json_path, "r") as f:
-            flash_times = json.load(f)
-        os.remove(json_path)
+    timeline_scenes = options.get("timelineScenes", [])
+    
+    if len(timeline_scenes) > 1:
+        # The first scene is usually at 0.0, we want the subsequent splits
+        for scene in timeline_scenes[1:]:
+            t = float(scene.get("timestamp", 0.0))
+            if t > 0.0:
+                flash_times.append(t)
 
     if not flash_times:
-        print("[⚙️] No cuts detected. Skipping transitions.")
+        print("[⚙️] No cuts detected in timeline. Skipping transitions.")
         return video_path
 
     # ── 1. Probe source video ───────────────────────────────────────────────
@@ -2548,55 +2545,10 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
         os.path.join(frames_dir, "%06d.jpg")
     ], check=True, capture_output=True)
 
-    # ── 3. Transition Math (The Flash Stretch + Spring) ─────────────────────
-    DAMPING = 7.0
-    FREQUENCY = 14.0
-
-    def get_stretched_a(frame, t_norm):
-        # Accelerates left: t^1.5 curve
-        a_x = int(-W * (t_norm ** 1.5))
-        canvas = np.zeros_like(frame)
-        if a_x == 0:
-            return frame
-        if a_x <= -W:
-            # Fully stretched off screen — just fill with last column
-            col = frame[:, -1:]
-            return cv2.resize(col, (W, H))
-            
-        src_x = -a_x
-        canvas[:, :W-src_x] = frame[:, src_x:]
-        
-        # Rubber band stretch the remaining gap
-        last_col = frame[:, -1:]
-        stretched = cv2.resize(last_col, (src_x, H))
-        canvas[:, W-src_x:] = stretched
-        return canvas
-
-    def get_stretched_b(frame, t_norm):
-        # Springs in from right
-        offset = W * math.exp(-DAMPING * t_norm) * math.cos(FREQUENCY * t_norm)
-        b_x = int(offset)
-        canvas = np.zeros_like(frame)
-        
-        if b_x <= 0:
-            return frame
-        if b_x >= W:
-            col = frame[:, :1]
-            return cv2.resize(col, (W, H))
-            
-        canvas[:, b_x:] = frame[:, :W-b_x]
-        
-        # Rubber band stretch the head gap
-        first_col = frame[:, :1]
-        stretched = cv2.resize(first_col, (b_x, H))
-        canvas[:, :b_x] = stretched
-        return canvas
-
-    # ── 4. Apply Transitions In-Place ───────────────────────────────────────
-    print(f"[🎬] Applying elastic blur to {len(flash_times)} jump cuts...")
+    # ── 3. Transition Math (Cinematic Whip Pan Slide Left) ─────────────────────
+    print(f"[🎬] Applying cinematic horizontal whip-pan to {len(flash_times)} jump cuts...")
     
     total_extracted = len([f for f in os.listdir(frames_dir) if f.endswith(".jpg")])
-    white_screen = np.full((H, W, 3), 255, dtype=np.uint8)
 
     for t_cut in flash_times:
         # FFmpeg image sequences start at index 1
@@ -2605,7 +2557,7 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
         start_idx = max(1, cut_frame_idx - HALF_TRANS)
         end_idx   = min(total_extracted, cut_frame_idx + HALF_TRANS)
         
-        # Freeze the frames at the boundary to create the clean stretch effect
+        # Freeze the frames at the boundary
         a_frame_path = os.path.join(frames_dir, f"{start_idx:06d}.jpg")
         b_frame_path = os.path.join(frames_dir, f"{end_idx:06d}.jpg")
         
@@ -2622,22 +2574,33 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
             curr_idx = start_idx + i
             t_norm = i / max(1, num_frames - 1)
             
-            a_stretched = get_stretched_a(frame_a, t_norm)
-            b_stretched = get_stretched_b(frame_b, t_norm)
+            # Ease-in-out curve for natural camera whip motion
+            eased_t = t_norm * t_norm * (3.0 - 2.0 * t_norm)
             
-            # Crossfade the two stretched canvases (hides the seam completely)
-            composite = cv2.addWeighted(a_stretched, 1.0 - t_norm, b_stretched, t_norm, 0)
+            # Camera pans left, meaning the footage slides left (offset increases)
+            offset_x = int(W * eased_t)
             
-            # The Flash Brightness Spike (peaks at center of transition)
-            flash_intensity = 1.0 - (abs(t_norm - 0.5) * 2) # 0 to 1 back to 0
-            # Apply max 70% white overlay
-            flash_alpha = flash_intensity * 0.70
+            canvas = np.zeros((H, W, 3), dtype=np.uint8)
             
-            final = cv2.addWeighted(composite, 1.0 - flash_alpha, white_screen, flash_alpha, 0)
-            
+            # Draw outgoing scene (A) sliding out to the left
+            if offset_x < W:
+                canvas[:, :W-offset_x] = frame_a[:, offset_x:]
+                
+            # Draw incoming scene (B) sliding in from the right
+            if offset_x > 0:
+                canvas[:, W-offset_x:] = frame_b[:, :offset_x]
+                
+            # Calculate directional horizontal motion blur
+            # Peaks at the center of the transition
+            blur_intensity = int(W * 0.15 * (1.0 - abs(t_norm - 0.5) * 2))
+            if blur_intensity > 1:
+                # Ensure kernel size is odd for OpenCV
+                if blur_intensity % 2 == 0: blur_intensity += 1
+                canvas = cv2.blur(canvas, (blur_intensity, 1))
+                
             # Overwrite the JPEG
             out_path = os.path.join(frames_dir, f"{curr_idx:06d}.jpg")
-            cv2.imwrite(out_path, final)
+            cv2.imwrite(out_path, canvas)
 
     # ── 5. Re-encode to MP4 (Zero Drift) ────────────────────────────────────
     print("[⚙️] Re-compiling video sequence with original audio and transition SFX...")
