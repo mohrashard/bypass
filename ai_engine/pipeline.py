@@ -286,10 +286,10 @@ def stage_cinematic_color(video_path: str, color_options: dict) -> str:
         # 3. eq: Lifts the shadows slightly and boosts contrast to mimic Apple's Smart HDR.
         # 4. unsharp: Crisps up the edges after the upscale.
         filter_chain = (
-            "hqdn3d=3.0:2.0:4.0:3.0,"
+            "hqdn3d=4.0:3.0:6.0:4.5,"
             "eq=contrast=1.08:saturation=1.15:gamma=1.05,"
-            "unsharp=5:5:1.0:3:3:0.0,"
-            "scale='if(gt(iw,ih),1920,-2)':'if(gt(iw,ih),-2,1920)':flags=bicubic"
+            "unsharp=5:5:1.2:3:3:0.0,"
+            "scale='if(gt(iw,ih),3840,-2)':'if(gt(iw,ih),-2,3840)':flags=bicubic"
         )
     else:
         print("      ↳ Mode: iPhone Pro Max (Smart HDR)")
@@ -299,8 +299,9 @@ def stage_cinematic_color(video_path: str, color_options: dict) -> str:
     try:
         subprocess.run([
             "ffmpeg", "-i", video_path,
+            "-filter_threads", "8",
             "-vf", filter_chain,
-            "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18", "-b:v", "0",
+            "-c:v", "h264_nvenc", "-preset", "p1", "-cq", "18", "-b:v", "0",
             "-pix_fmt", "yuv420p", "-c:a", "copy",
             output_vid, "-y"
         ], check=True, capture_output=True)
@@ -336,9 +337,51 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
     mixed_style = cap_options.get("captionMixedStyle", False)
 
     is_manual = cap_options.get("captionLanguage") == "manual_srt"
+    manual_gemini_json = cap_options.get("manualGeminiJson", "")
+    is_groq_sync = bool(manual_gemini_json)
     word_events = []
     
-    if is_manual:
+    if is_groq_sync:
+        print("[⚙️] Parsing Groq Synced JSON...")
+        try:
+            segments_data = json.loads(manual_gemini_json)
+            flash_times = []
+            
+            for i, seg in enumerate(segments_data):
+                phrase = seg.get("phrase", "")
+                if not phrase: continue
+                
+                # Extract director cuts (|) for Auto Transitions
+                if "|" in phrase:
+                    if i + 1 < len(segments_data):
+                        flash_times.append(float(segments_data[i+1].get("start", 0)))
+                        
+                # NEW: Remove | from phrase so it doesn't render on screen
+                phrase_clean = phrase.replace("|", "")
+                words = phrase_clean.split()
+                if not words: continue
+                
+                start_t = float(seg.get("start", 0))
+                end_t = float(seg.get("end", start_t + 1.0))
+                dur = max(0, end_t - start_t)
+                time_per_word = dur / len(words)
+                
+                for j, word in enumerate(words):
+                    word_events.append({
+                        "word": word.strip(),
+                        "start": start_t + j * time_per_word,
+                        "end": start_t + (j + 1) * time_per_word
+                    })
+                    
+            if flash_times:
+                with open(os.path.join(base_dir, "_flash_times.json"), "w") as f:
+                    json.dump(flash_times, f)
+                    
+        except Exception as e:
+            print(f"[❌] FATAL: Invalid Groq JSON: {e}")
+            is_groq_sync = False
+            
+    if is_manual and not is_groq_sync:
         print("[⚙️] Parsing Manual Subtitles (Word-Level and Standard SRT)...")
         srt_text = cap_options.get("manualSrtText", "")
         lines = srt_text.strip().split('\n')
@@ -409,7 +452,7 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
                     word_events[i]["end"] = next_start
             else:
                 word_events[i]["end"] = max(word_events[i]["start"] + 0.5, word_events[i]["end"])
-    else:
+    elif not is_groq_sync:
         print("[⚙️] Loading Whisper model...")
         model = whisper.load_model("large")
         temp_audio = os.path.join(base_dir, "_whisper_audio.wav")
@@ -811,7 +854,7 @@ def stage_burn_captions(video_path: str, cap_options: dict) -> str:
         cmd = inputs + [
             "-filter_complex", ";".join(filter_parts),
             "-map", f"[v{len(chunk)}]", "-map", "0:a:0",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "17",
+            "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18", "-b:v", "0",
             "-pix_fmt", "yuv420p", "-c:a", "copy", chunk_out, "-y"
         ]
 
@@ -1840,14 +1883,14 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
                               if (float(timeline_scenes[i+1].get('timestamp') if i+1 < len(timeline_scenes) else video_duration) - float(scene.get('timestamp', 0))) > 0])
         n_segs = valid_scene_count
         if n_segs > 1:
-            filter_complex += f"{seg_labels}concat=n={n_segs}:v=1:a=0,format=yuv420p[outv]"
+            filter_complex += f"{seg_labels}concat=n={n_segs}:v=1:a=0,format=yuv420p[outv];"
         elif n_segs == 1:
             # find the one valid seg label
             first_valid = next(
                 i for i, scene in enumerate(timeline_scenes)
                 if (float(timeline_scenes[i+1].get('timestamp') if i+1 < len(timeline_scenes) else video_duration) - float(scene.get('timestamp', 0))) > 0
             )
-            filter_complex += f"[seg{first_valid}]format=yuv420p[outv]"
+            filter_complex += f"[seg{first_valid}]format=yuv420p[outv];"
         else:
             print("[❌] No valid scenes found. Skipping background FX.")
             for f in [temp_audio]:
@@ -1882,6 +1925,8 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
             total_audios = len(swoosh_times) + 1
             filter_complex += f"{mix_inputs}amix=inputs={total_audios}:duration=first:dropout_transition=2:normalize=0[mixed_a];"
             audio_map = "[mixed_a]"
+
+        filter_complex = filter_complex.rstrip(";")
 
         print(f"[⚙️] Running ultra-fast FFmpeg render pipeline (Multi-Scene + Sandwich) → {out_w}x{out_h}...")
         cmd = [
@@ -2359,13 +2404,13 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
     filter_complex = f"[0:v]split={len(flash_times)+1}"
     for i in range(len(flash_times)+1):
         filter_complex += f"[v{i}]"
-    filter_complex += ";\\n"
+    filter_complex += ";"
     
     last_t = 0.0
     for i, t in enumerate(flash_times):
-        filter_complex += f"[v{i}]trim=start={last_t}:end={t},setpts=PTS-STARTPTS[seg{i}];\\n"
+        filter_complex += f"[v{i}]trim=start={last_t}:end={t},setpts=PTS-STARTPTS[seg{i}];"
         last_t = t
-    filter_complex += f"[v{len(flash_times)}]trim=start={last_t},setpts=PTS-STARTPTS[seg{len(flash_times)}];\\n"
+    filter_complex += f"[v{len(flash_times)}]trim=start={last_t},setpts=PTS-STARTPTS[seg{len(flash_times)}];"
 
     # Now apply the transition math to every incoming segment (seg 1 to n)
     concat_inputs = "[seg0]"
@@ -2375,17 +2420,13 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
         blur_expr = "boxblur=lr=if(lte(t,0.3), 20*(1-(t/0.3)), 0):lp=0"
         flash_expr = "eq=brightness='if(lte(t,0.3), 0.8 * (1 - (t/0.3)), 0)'"
         
-        filter_complex += f"color=c=black:s=1080x1920:d=10[bg{i}];\\n"
+        filter_complex += f"color=c=black:s=1080x1920:d=10[bg{i}];"
         overlay_cmd = f"overlay=x='{elastic_x_expr}':y=0:shortest=1"
-        filter_complex += f"[bg{i}][seg{i}]{overlay_cmd},{blur_expr},{flash_expr}[trans{i}];\\n"
+        filter_complex += f"[bg{i}][seg{i}]{overlay_cmd},{blur_expr},{flash_expr}[trans{i}];"
         
         concat_inputs += f"[trans{i}]"
     
     filter_complex += f"{concat_inputs}concat=n={len(flash_times)+1}:v=1:a=0[outv]"
-    
-    # We must replace \\n with actual \n before executing since we escaped them to avoid string literal errors
-    filter_complex = filter_complex.replace("\\\\n", "\\n")
-    
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
@@ -3725,38 +3766,22 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
         trajectory_y = median_filter(trajectory_y, size=median_k, mode="nearest")
 
         print("[⚙️] Pass 3: Applying low-pass filter to isolate real (slow) motion...")
-        is_motion_tracking = options.get("motionTracking", False)
-        
         sigma_val = float(options.get("vibrationFilterStrength", 8.0))
-        if is_motion_tracking:
-            sigma_val *= 4.0  # High-lag spring physics
-            
         smoothed_x = gaussian_filter1d(trajectory_x, sigma=sigma_val, mode="nearest")
         smoothed_y = gaussian_filter1d(trajectory_y, sigma=sigma_val, mode="nearest")
 
-        is_motion_tracking = options.get("motionTracking", False)
-        
-        if is_motion_tracking:
-            print("[⚙️] Pass 3b: Calculating dynamic motion tracking trajectory...")
-            # For motion tracking, camera chases the smoothed face
-            initial_x = np.nanmedian(trajectory_x[:30]) if len(trajectory_x) > 30 else trajectory_x[0]
-            initial_y = np.nanmedian(trajectory_y[:30]) if len(trajectory_y) > 30 else trajectory_y[0]
-            
-            shift_x = smoothed_x - initial_x
-            shift_y = smoothed_y - initial_y
-            
-            # Allow larger shifts, but clamp smoothly
-            max_shift_px = float(width * 0.25) # 25% of width Jump-Cut Protection
-            shift_x = _soft_clip(shift_x, max_shift_px)
-            shift_y = _soft_clip(shift_y, max_shift_px)
-        else:
-            print("[⚙️] Pass 3b: Clamping correction magnitude...")
-            shift_x = trajectory_x - smoothed_x
-            shift_y = trajectory_y - smoothed_y
-            
-            max_shift_px = float(options.get("maxCorrectionPx", 12.0))
-            shift_x = _soft_clip(shift_x, max_shift_px)
-            shift_y = _soft_clip(shift_y, max_shift_px)
+        shift_x = trajectory_x - smoothed_x
+        shift_y = trajectory_y - smoothed_y
+
+        print("[⚙️] Pass 3b: Clamping correction magnitude...")
+        # If a correction is asking for a huge shift, it's not "shake" -
+        # it's either a genuine fast head movement or a leftover detection
+        # glitch. Either way, over-correcting it is what produces the
+        # "too much shake" feeling. Clamp + soft-taper instead of hard cut,
+        # so we don't introduce a new discontinuity.
+        max_shift_px = float(options.get("maxCorrectionPx", 12.0)) # Reduced to 3.0 to prevent tugging
+        shift_x = _soft_clip(shift_x, max_shift_px)
+        shift_y = _soft_clip(shift_y, max_shift_px)
         
         print("[⚙️] Pass 4: Rendering smooth frames via FFmpeg pipe...")
         cmd = [
@@ -3770,7 +3795,7 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cap = cv2.VideoCapture(video_path)
 
-        zoom_scale = 1.12 if is_motion_tracking else float(options.get("zoomScale", 1.03))
+        zoom_scale = float(options.get("zoomScale", 1.03))
 
         frame_idx = 0
         while True:
@@ -3780,12 +3805,6 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
 
             dx = shift_x[frame_idx]
             dy = shift_y[frame_idx]
-
-            if is_motion_tracking:
-                sway_x = np.sin(frame_idx * 0.04) * (width * 0.015)
-                sway_y = np.cos(frame_idx * 0.033) * (height * 0.015)
-                dx += sway_x
-                dy += sway_y
 
             M = np.float32([
                 [zoom_scale, 0, -dx + (width * (1 - zoom_scale) / 2)],
@@ -3817,13 +3836,8 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
 # 19. MAIN PIPELINE ORCHESTRATOR
 # ─────────────────────────────────────────────
 def stage_global_motion_tracking(video_path: str, options: dict) -> str:
-    # A lightweight wrapper that runs stage_fast_stabilize in motion_tracking mode
-    # on the fully composited video to create a cinematic handheld feel.
-    print("\n[🎥] Activating Global Handheld Motion Tracking...")
-    mt_options = options.copy()
-    mt_options["motionTracking"] = True
-    mt_options["zoomScale"] = 1.12 # Zoom slightly to allow sway margin
-    return stage_fast_stabilize(video_path, mt_options)
+    # FUNCTION REMOVED AS PER LEGACY REQUEST
+    return video_path
 
 def run_pipeline(video_path: str, options_json: str) -> None:
     import json as _json
@@ -3868,8 +3882,10 @@ CRITICAL RULES:
 5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing.
 6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
 7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text.
-8. THE DIRECTOR'S CUT (CRITICAL): Place a pipe symbol "|" at the end of a phrase ONLY at key narrative beats.
-   DO NOT exceed 8 pipes in total.
+8. THE DIRECTOR'S CUT (CRITICAL - DO NOT IGNORE): You MUST place a literal pipe symbol "|" at the end of specific phrases where a visual scene change should occur. 
+   - Example: "This is why you need AI automation |"
+   - The video editor software literally searches for the "|" character to know when to jump-cut. If you omit it, the video will break. 
+   - DO NOT exceed 8 pipes in total.
 
 You must provide the approximate start and end times for each phrase in seconds.
 Output strictly as a JSON array.
@@ -3892,13 +3908,13 @@ Do not include any markdown formatting. Just the raw JSON array."""
     if options.get("mergeEngine"):
         current_video = stage_merge_audio(current_video, options)
 
-    # 3. Background FX + Sandwich Text (Based on UI Timeline)
-    if options.get("blurBackground"):
-        current_video = stage_background_fx(current_video, options)
-
-    # 4. Remove Dead Air / Jump Cuts (Chops the composited video!)
+    # 3. Remove Dead Air / Jump Cuts (MUST chop BEFORE timeline scenes so UI timestamps match perfectly!)
     if options.get("removeSilence"):
         current_video = stage_remove_silence(current_video, options)
+
+    # 4. Background FX + Sandwich Text (Based on UI Timeline)
+    if options.get("blurBackground"):
+        current_video = stage_background_fx(current_video, options)
 
     # 5. Semantic Smart Zoom
     if options.get("autoZoom"):

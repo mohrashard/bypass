@@ -62,6 +62,14 @@ export default function App() {
 
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  
+  // ── NEW: Transcription Workflow State ──
+  const [showTranscriptionUI, setShowTranscriptionUI] = useState(false);
+  const [rawTranscriptJson, setRawTranscriptJson] = useState<any[]>([]);
+  const [perfectScript, setPerfectScript] = useState("");
+  const [correctedTranscriptJson, setCorrectedTranscriptJson] = useState<any[]>([]);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isGroqFixing, setIsGroqFixing] = useState(false);
 
   const [timelineScenes, setTimelineScenes] = useState<SceneConfig[]>([
     { id: 'scene-0', timestamp: 0.0, bgImagePath: '', bgImageName: '', textBehind: '', textY: 50, textSize: 100, textAnimation: 'slide-up' }
@@ -428,7 +436,6 @@ export default function App() {
     const stages = [
       willStabilize ? '1. Stabilize' : null,
       options.mergeAudioPath ? '2. Merge Audio' : null,
-      '3. Chop Dead Air'
     ].filter(Boolean).join(' → ');
     // Output is streamed via 'engine-stdout' Tauri events.
     setTerminalLines([`⚙️ Pre-Processing: ${stages}`]);
@@ -438,7 +445,7 @@ export default function App() {
         processType: 'pipeline',
         optionsJson: JSON.stringify({
           ...options,
-          removeSilence: true,
+          removeSilence: false, // Wait! We removed this from pre-process!
           mergeEngine: !!options.mergeAudioPath,
           stabilizerEngine: willStabilize,
           blurBackground: false,
@@ -463,6 +470,66 @@ export default function App() {
       }
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleChopAndTranscribe = async () => {
+    if (!selectedFilePath || isTranscribing || isProcessing) return;
+    setIsTranscribing(true);
+    setTerminalLines([`⚙️ Chopping Dead Air & Booting Whisper AI...`]);
+    try {
+      const out: string = await invoke('run_python_engine', {
+        videoPath: selectedFilePath,
+        processType: 'transcribe_engine',
+        optionsJson: JSON.stringify({
+          ...options,
+          transcribeAction: "transcribe",
+          removeSilence: true, // We execute the chop here!
+        }),
+      });
+      // Parse JSON from output
+      const match = out.match(/__JSON_START__([\s\S]*?)__JSON_END__/);
+      if (match) {
+         const data = JSON.parse(match[1]);
+         setRawTranscriptJson(data.segments);
+         setShowTranscriptionUI(true);
+         setTerminalLines((prev) => [...prev, '', `✅ Transcription Ready for Review!`]);
+      } else {
+         setTerminalLines((prev) => [...prev, '', `❌ Failed to parse Whisper JSON`]);
+      }
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  const handleGroqFix = async () => {
+    if (!selectedFilePath || isGroqFixing || !perfectScript) return;
+    setIsGroqFixing(true);
+    setTerminalLines([`🤖 Sending to Groq LLM for perfect spelling sync...`]);
+    try {
+      const out: string = await invoke('run_python_engine', {
+        videoPath: selectedFilePath,
+        processType: 'transcribe_engine',
+        optionsJson: JSON.stringify({
+          transcribeAction: "groq_fix",
+          rawSegments: rawTranscriptJson,
+          perfectScript: perfectScript
+        }),
+      });
+      const match = out.match(/__JSON_START__([\s\S]*?)__JSON_END__/);
+      if (match) {
+         const data = JSON.parse(match[1]);
+         setCorrectedTranscriptJson(data);
+         setTerminalLines((prev) => [...prev, '', `✅ Groq synced perfectly!`]);
+      } else {
+         setTerminalLines((prev) => [...prev, '', `❌ Failed to parse Groq JSON`]);
+      }
+    } catch (error) {
+      setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
+    } finally {
+      setIsGroqFixing(false);
     }
   };
 
@@ -497,6 +564,8 @@ export default function App() {
     const finalOptions = {
       ...options,
       timelineScenes,
+      removeSilence: options.removeSilence, // Must chop during final render so BGs and Captions map correctly!
+      manualGeminiJson: correctedTranscriptJson.length > 0 ? JSON.stringify(correctedTranscriptJson) : undefined,
       blurBackground: options.blurBackground || hasTimelineBg || hasTimelineText,
       textBehindSubject: options.textBehindSubject || hasTimelineText,
       sceneTransition: options.sceneTransition || hasTimelineCuts,
@@ -658,8 +727,15 @@ export default function App() {
                         <button 
                           onClick={handlePreProcess}
                           disabled={isProcessing}
-                          className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
+                          className="w-full mb-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
                           2. Clean & Merge Now
+                        </button>
+                        
+                        <button 
+                          onClick={handleChopAndTranscribe}
+                          disabled={isTranscribing}
+                          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
+                          3. Chop & Transcribe
                         </button>
                       </div>
                     </div>
@@ -799,6 +875,46 @@ export default function App() {
                       <option value="ai">MediaPipe AI (No Green Screen needed)</option>
                     </select>
                   </div>
+                  
+                  {/* Phase 3: Transcription Editor UI */}
+                  {showTranscriptionUI && rawTranscriptJson.length > 0 && (
+                    <div className="mt-4 bg-zinc-900 border border-emerald-500/50 rounded-xl p-5 flex flex-col gap-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-2">
+                          <span className="text-lg">🤖</span> Groq Transcription Sync
+                        </h3>
+                        <span className="text-xs text-zinc-500 font-mono">PHASE 3</span>
+                      </div>
+                      
+                      <div className="flex gap-4 h-[300px]">
+                        <div className="flex-1 flex flex-col gap-2">
+                          <span className="text-xs font-bold text-zinc-400">PASTE PERFECT SCRIPT HERE</span>
+                          <textarea 
+                            value={perfectScript}
+                            onChange={(e) => setPerfectScript(e.target.value)}
+                            placeholder="Enter the correct script with spelling and | for director cuts..."
+                            className="flex-1 w-full bg-zinc-950 border border-zinc-700 rounded-lg p-3 text-sm text-zinc-300 outline-none focus:border-emerald-500 resize-none font-mono"
+                          />
+                          <button 
+                            onClick={handleGroqFix}
+                            disabled={isGroqFixing || !perfectScript}
+                            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
+                            {isGroqFixing ? "Syncing..." : "Auto-Fix spelling with Groq"}
+                          </button>
+                        </div>
+                        
+                        <div className="flex-1 flex flex-col gap-2">
+                          <span className="text-xs font-bold text-zinc-400">CORRECTED TIMESTAMPS JSON</span>
+                          <div className="flex-1 bg-zinc-950 border border-zinc-700 rounded-lg p-3 overflow-y-auto font-mono text-xs text-sky-300 whitespace-pre-wrap select-text">
+                            {correctedTranscriptJson.length > 0 
+                              ? JSON.stringify(correctedTranscriptJson, null, 2) 
+                              : "// Waiting for Groq correction..."}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
                 </div>
               ) : (
                 <div onClick={handleSelectFile}
