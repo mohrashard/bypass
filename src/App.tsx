@@ -171,6 +171,18 @@ export default function App() {
     };
   }, []);
 
+  // Auto-load the output file when the pipeline prints "PIPELINE COMPLETE"
+  useEffect(() => {
+    if (terminalLines.length === 0) return;
+    const lastLine = terminalLines[terminalLines.length - 1];
+    const match = lastLine.match(/PIPELINE COMPLETE\.?\s*Final output:\s*(.+)/);
+    if (match && match[1]) {
+      const newPath = match[1].trim();
+      setSelectedFilePath(newPath);
+      setSelectedFileName(newPath.split(/[\\//]/).pop() || '');
+    }
+  }, [terminalLines]);
+
   useEffect(() => {
     consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [terminalLines]);
@@ -401,35 +413,54 @@ export default function App() {
     if (selected && typeof selected === 'string') {
       updateScene(sceneId, {
         bgImagePath: selected,
-        bgImageName: selected.split(/[\\/]/).pop() ?? 'image.jpg',
+        bgImageName: selected.split(/[\\\/]/).pop() ?? 'image.jpg',
       });
     }
   };
 
+
+
+
   const handlePreProcess = async () => {
     if (!selectedFilePath || isProcessing) return;
     setIsProcessing(true);
-    setTerminalLines(['Starting Pre-Processing (Audio Merge + Dead Air Removal)...']);
+    const willStabilize = options.stabilizerEngine;
+    const stages = [
+      willStabilize ? '1. Stabilize' : null,
+      options.mergeAudioPath ? '2. Merge Audio' : null,
+      '3. Chop Dead Air'
+    ].filter(Boolean).join(' → ');
+    // Output is streamed via 'engine-stdout' Tauri events.
+    setTerminalLines([`⚙️ Pre-Processing: ${stages}`]);
     try {
-      const output = await invoke<string>('run_python_engine', {
+      await invoke('run_python_engine', {
         videoPath: selectedFilePath,
         processType: 'pipeline',
-        optionsJson: JSON.stringify({ 
-          ...options, 
-          preProcessOnly: true,
+        optionsJson: JSON.stringify({
+          ...options,
           removeSilence: true,
-          mergeEngine: !!options.mergeAudioPath
+          mergeEngine: !!options.mergeAudioPath,
+          stabilizerEngine: willStabilize,
+          blurBackground: false,
+          burnCaptions: false,
+          cinematicColor: false,
+          cinematicGrade: 'none',
+          bottomGlow: false,
+          hookEngine: false,
+          autoTransitions: false,
+          autoZoom: false,
+          motionTracking: false,
+          studioAudio: false,
+          applyBeautyFilter: false,
+          maskEngine: false,
+          enhanceAiImage: false,
         }),
       });
-      const match = output.match(/Final output: (.+)/);
-      if (match && match[1]) {
-        const newPath = match[1].trim();
-        setSelectedFilePath(newPath);
-        setSelectedFileName(newPath.split(/[\\/]/).pop() || '');
-        setTerminalLines((prev) => [...prev, '', `✅ Pre-Processing Complete! Loaded into timeline.`]);
-      }
     } catch (error) {
-      setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${String(error)}`]);
+      const errStr = String(error);
+      if (!errStr.includes('terminated')) {
+        setTerminalLines((prev) => [...prev, '', `❌ ERROR: ${errStr}`]);
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -466,7 +497,7 @@ export default function App() {
     const finalOptions = {
       ...options,
       timelineScenes,
-      blurBackground: options.blurBackground || hasTimelineBg,
+      blurBackground: options.blurBackground || hasTimelineBg || hasTimelineText,
       textBehindSubject: options.textBehindSubject || hasTimelineText,
       sceneTransition: options.sceneTransition || hasTimelineCuts,
       autoSfx: options.autoSfx || hasTimelineCuts

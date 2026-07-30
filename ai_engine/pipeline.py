@@ -1726,6 +1726,11 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
         out.release()
         if os.path.exists(temp_vid): os.remove(temp_vid)
 
+        # ── TRUE 9:16 VERTICAL ARCHITECTURE ─────────────────────────────────
+        # Final output canvas is ALWAYS 1080x1920 regardless of source dimensions.
+        # All coordinates map to out_w / out_h, not source w/h.
+        out_w, out_h = 1080, 1920
+
         # Handle Timeline Scenes & Sandwich Text
         timeline_scenes = bg_options.get("timelineScenes", [])
         if not timeline_scenes:
@@ -1752,7 +1757,7 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
         inputs = ["-i", video_path]
         num_inputs = 1
         filter_complex = ""
-        bg_streams = []
+        valid_scene_count = 0
 
         for i, scene in enumerate(timeline_scenes):
             start_t = float(scene.get("timestamp", 0))
@@ -1760,60 +1765,99 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
             dur = end_t - start_t
             if dur <= 0: continue
 
-            # 1. Background Source
+            valid_scene_count += 1
+
+            # 1. Background Source — always scale to 1080x1920
             scene_bg_img = scene.get("bgImagePath", "")
+            scene_bg_scale = int(scene.get("bgScale", 100))
             if scene_bg_img and os.path.exists(scene_bg_img):
                 inputs.extend(["-loop", "1", "-i", scene_bg_img])
                 idx = num_inputs
                 num_inputs += 1
-                scene_bg_scale = int(scene.get("bgScale", 100))
-                bg_w = int(w * (scene_bg_scale / 100.0))
-                bg_h = int(h * (scene_bg_scale / 100.0))
-                filter_complex += f"[{idx}:v]trim=duration={dur},scale={bg_w}:{bg_h}:force_original_aspect_ratio=increase,crop={w}:{h},setpts=PTS-STARTPTS[bg_raw{i}];"
+                # base_scale = max(out_w/src_w, out_h/src_h) ensures full coverage
+                # Then we apply the user bgScale zoom on top, centred crop to 1080x1920
+                zoom_pct = scene_bg_scale / 100.0
+                filter_complex += (
+                    f"[{idx}:v]trim=duration={dur},setpts=PTS-STARTPTS,"
+                    f"scale=iw*max({out_w}/iw\\,{out_h}/ih)*{zoom_pct:.4f}:"
+                    f"ih*max({out_w}/iw\\,{out_h}/ih)*{zoom_pct:.4f},"
+                    f"crop={out_w}:{out_h}[bg_raw{i}];"
+                )
             else:
                 scene_hex = hex_color if len(hex_color) == 6 else "09090b"
-                filter_complex += f"color=c=#{scene_hex}:s={w}x{h}:d={dur}[bg_raw{i}];"
+                filter_complex += f"color=c=#{scene_hex}:s={out_w}x{out_h}:d={dur}[bg_raw{i}];"
 
-            # 2. Sandwich Text
+            # 2. Sandwich Text — coordinates mapped to out_h / out_w
             text = scene.get("textBehind", "").strip()
             if text:
-                text_y = int(scene.get("textY", 50))
+                text_y_pct = int(scene.get("textY", 50))
                 text_size = int(scene.get("textSize", 100))
-                fs = int(text_size * 1.5)
-                # Escape single quotes and colons for FFmpeg
+                # Font size relative to output height, scaled by textSize %
+                fs = int(out_h * 0.07 * (text_size / 100.0))
+                fs = max(fs, 24)
                 esc_text = text.replace("'", "\\\'").replace(":", "\\:")
-                text_cmd = f"drawtext=text='{esc_text}':fontcolor=white:fontsize={fs}:x=(w-text_w)/2:y=(h-text_h)*{text_y}/100"
+                # text_y anchored to out_h — text slides from 25% lower than marker (chest level)
+                base_y = int(out_h * text_y_pct / 100)
+                start_y = min(base_y + int(out_h * 0.25), out_h - fs - 10)
+                text_x = f"({out_w}-text_w)/2"
+                text_cmd = (
+                    f"drawtext=text='{esc_text}':fontcolor=white:fontsize={fs}"
+                    f":x={text_x}:y={base_y}"
+                    f":fontfile=/Windows/Fonts/impact.ttf"
+                    f":shadowcolor=black:shadowx=3:shadowy=3"
+                )
                 filter_complex += f"[bg_raw{i}]{text_cmd}[bg{i}];"
             else:
                 filter_complex += f"[bg_raw{i}]copy[bg{i}];"
 
-            bg_streams.append(f"[bg{i}]")
-
-            # 3. Subject Overlay
+            # 3. Subject — chroma key, scale to 1080x1920, compose on bg
             scene_sub_scale = int(scene.get("subjectScale", 100))
             scene_sub_y = int(scene.get("subjectY", 0))
-            sub_w = int(w * scene_sub_scale / 100)
-            sub_h = int(h * scene_sub_scale / 100)
-            sub_w = sub_w if sub_w % 2 == 0 else sub_w + 1
-            sub_h = sub_h if sub_h % 2 == 0 else sub_h + 1
-            y_offset = f"+(H*{scene_sub_y}/100)" if scene_sub_y != 0 else ""
+
+            # Scale source video to 9:16 canvas first, then apply subject scale
+            final_scale = scene_sub_scale / 100.0
+            sub_canvas_w = int(out_w * final_scale)
+            sub_canvas_h = int(out_h * final_scale)
+            sub_canvas_w += sub_canvas_w % 2
+            sub_canvas_h += sub_canvas_h % 2
+
+            # y_offset: positive = down, negative = up — maps to out_h
+            y_px_offset = int(out_h * scene_sub_y / 100)
+            overlay_y = f"H-h+{y_px_offset}" if y_px_offset >= 0 else f"H-h{y_px_offset}"
 
             chroma_filter = "chromakey=0x1A9535:0.11:0.02,despill=green"
-            
-            filter_complex += f"[0:v]trim=start={start_t}:duration={dur},setpts=PTS-STARTPTS,{chroma_filter},scale={sub_w}:{sub_h}[fg{i}];"
-            filter_complex += f"{bg_streams[-1]}[fg{i}]overlay=(W-w)/2:H-h{y_offset}:shortest=1[seg{i}];"
+            filter_complex += (
+                f"[0:v]trim=start={start_t}:duration={dur},setpts=PTS-STARTPTS,"
+                f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
+                f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,"
+                f"{chroma_filter},"
+                f"scale={sub_canvas_w}:{sub_canvas_h}[fg{i}];"
+            )
+            filter_complex += f"[bg{i}][fg{i}]overlay=(W-w)/2:{overlay_y}:shortest=1[seg{i}];"
 
-        # Concat all segments
-        concat_inputs = "".join([f"[seg{i}]" for i in range(len(timeline_scenes))])
-        if len(timeline_scenes) > 1:
-            filter_complex += f"{concat_inputs}concat=n={len(timeline_scenes)}:v=1:a=0,format=yuv420p[outv]"
+        # Concat all valid segments
+        seg_labels = "".join([f"[seg{i}]" for i, scene in enumerate(timeline_scenes)
+                              if (float(timeline_scenes[i+1].get('timestamp') if i+1 < len(timeline_scenes) else video_duration) - float(scene.get('timestamp', 0))) > 0])
+        n_segs = valid_scene_count
+        if n_segs > 1:
+            filter_complex += f"{seg_labels}concat=n={n_segs}:v=1:a=0,format=yuv420p[outv]"
+        elif n_segs == 1:
+            # find the one valid seg label
+            first_valid = next(
+                i for i, scene in enumerate(timeline_scenes)
+                if (float(timeline_scenes[i+1].get('timestamp') if i+1 < len(timeline_scenes) else video_duration) - float(scene.get('timestamp', 0))) > 0
+            )
+            filter_complex += f"[seg{first_valid}]format=yuv420p[outv]"
         else:
-            filter_complex += f"{concat_inputs}format=yuv420p[outv]"
+            print("[❌] No valid scenes found. Skipping background FX.")
+            for f in [temp_audio]:
+                if os.path.exists(f): os.remove(f)
+            return video_path
 
         audio_idx = num_inputs
         inputs.extend(["-i", temp_audio])
 
-        print("[⚙️] Running ultra-fast FFmpeg render pipeline (Multi-Scene + Sandwich)...")
+        print(f"[⚙️] Running ultra-fast FFmpeg render pipeline (Multi-Scene + Sandwich) → {out_w}x{out_h}...")
         cmd = [
             "ffmpeg", *inputs,
             "-filter_complex", filter_complex,
@@ -1822,7 +1866,7 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
             "-c:a", "aac", "-b:a", "192k",
             "-shortest", output_vid, "-y"
         ]
-        
+
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
@@ -1833,7 +1877,7 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
         for f in [temp_audio]:
             if os.path.exists(f): os.remove(f)
 
-        print(f"[✅] Background FX applied: {output_vid}")
+        print(f"[✅] Background FX applied ({out_w}x{out_h} 9:16 vertical): {output_vid}")
         return output_vid
 
 
@@ -3669,127 +3713,33 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
         return video_path
 
 # ─────────────────────────────────────────────
-# ────────────────�    current_video = video_path
-
-    # 1. Fast Stabilize
-    if options.get("stabilizerEngine") or options.get("motionTracking"):
-        current_video = stage_fast_stabilize(current_video, options)
-
-    # 2. Audio Merge
-    if options.get("mergeEngine"):
-        current_video = stage_merge_audio(current_video, options)
-
-    # 3. Dead Air Removal (Chopper)
-    if options.get("removeSilence"):
-        current_video = stage_remove_silence(current_video, options)
-        
-    # 4. Background FX & Sandwich Compositing
-    if options.get("blurBackground"):
-        bg_video = stage_dynamic_background_fx(current_video, options)
-        current_video = stage_composite_sandwich(current_video, bg_video, options)
-
-    # 5. Semantic Smart Zoom
-    if options.get("autoZoom"):
-        current_video = stage_semantic_zoom(current_video, options)  
-
-    # 6. Algorithmic Color Grade
-    if options.get("cinematicColor"):
-        current_video = stage_cinematic_color(current_video, options)
-
-    if options.get("cinematicGrade") and options.get("cinematicGrade") != "none":
-        current_video = stage_cinematic_grade(current_video, options)
-
-    # 7. Cinematic Bottom Glow
-    if options.get("bottomGlow"):
-        color = options.get("glowColor", "#000000")
-        current_video = stage_bottom_glow(current_video, color)
-
-    # 8. Visual Hooks & Text Interrupts
-    if options.get("hookEngine"):
-        if options.get("startingHook") and options.get("startingHook") != "none":
-            current_video = stage_starting_hook(current_video, options)
-
-        if options.get("hookPrimaryText") or options.get("hookSecondaryText"):
-            current_video = stage_visual_hook(current_video, options)
-
-    # 9. AI B-Roll
-    if options.get("aiBroll"):
-        current_video = stage_ai_broll(current_video, options)
-
-    # 10. Studio Audio & MP3 Extract
-    if options.get("studioAudio"):
-        current_video = stage_studio_audio(current_video)
-        
-    if options.get("extractMp3"):
-        current_video = stage_mp4_to_mp3(current_video, options)
-
-    # 11. Beauty Filter
-    if options.get("applyBeautyFilter"):
-        current_video = stage_beauty_filter(current_video, options)
-
-    # 12. Captions & Overlays
-    if options.get("burnCaptions"):
-        if options.get("captionLanguage") == "si":
-            current_video = stage_burn_sinhala_captions(current_video, options)
-        else:
-            current_video = stage_burn_captions(current_video, options)
-
-    if options.get("autoTransitions"):
-        current_video = stage_hardcode_flash(current_video, options)
-
-    if options.get("exportCaptionOverlay"):
-        lang = options.get("captionLanguage", "en")
-        if lang == "si":
-            export_captions_overlay_si(current_video, options)
-        else:
-            export_captions_overlay_en(current_video, options)NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8") as tmp:
-                tmp.write(html_content)
-                tmp_path = tmp.name
-
-            try:
-                page.goto(f"file:///{tmp_path.replace(os.sep, '/')}", wait_until="networkidle")
-                # 3. Take the high-quality 2x screenshot
-                page.screenshot(path=output_image_path, type="jpeg", quality=100)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                    
-            browser.close()
-
-        print(f"[✅] High-Quality Screenshot saved (Watermarks Destroyed): {output_image_path}")
-        return output_image_path
-    except Exception as e:
-        print(f"[❌] Image screenshot enhancement failed: {e}")
-        return input_image_path
-
-# 14. MAIN PIPELINE ORCHESTRATION
+# 19. MAIN PIPELINE ORCHESTRATOR
 # ─────────────────────────────────────────────
-
 def run_pipeline(video_path: str, options_json: str) -> None:
-    options = json.loads(options_json)
-    print(f"\n[🎬] STARTING LOCAL RENDER ENGINE: {os.path.basename(video_path)}\n")
+    import json as _json
+    options = _json.loads(options_json)
+    print(f"\n[\U0001f3ac] STARTING LOCAL RENDER ENGINE: {os.path.basename(video_path)}\n")
 
     if not os.path.exists(video_path):
-        print(f"[❌] FATAL: Input file not found: {video_path}")
+        print(f"[\u274c] FATAL: Input file not found: {video_path}")
         print("Please re-select the file in the UI.")
         return
 
     if options.get("enhanceAiImage"):
-        print("\n[🎬] RUNNING AI IMAGE ENHANCEMENT...")
+        print("\n[\U0001f3ac] RUNNING AI IMAGE ENHANCEMENT...")
         result = stage_enhance_ai_image(video_path)
-        print(f"\n[🚀] PIPELINE COMPLETE. Final output: {result}")
+        print(f"\n[\U0001f680] PIPELINE COMPLETE. Final output: {result}")
         return
 
     if options.get("generatePromptOnly"):
-        print("\n[🎬] GENERATING SMART PROMPT...")
-        import subprocess
+        print("\n[\U0001f3ac] GENERATING SMART PROMPT...")
+        import subprocess as _sp
         base_dir = os.path.dirname(os.path.abspath(video_path))
         temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
-        subprocess.run(["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", temp_audio, "-y"], check=True, capture_output=True)
-        
+        _sp.run(["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", temp_audio, "-y"], check=True, capture_output=True)
         try:
             probe_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", temp_audio]
-            dur_out = subprocess.check_output(probe_cmd, text=True).strip()
+            dur_out = _sp.check_output(probe_cmd, text=True).strip()
             audio_dur = float(dur_out)
             duration_text = f"The total length of this audio is exactly {audio_dur:.2f} seconds. Your timestamps MUST NOT exceed this duration."
         except Exception:
@@ -3804,87 +3754,91 @@ CRITICAL RULES:
 1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
 2. Break the text into short, logical phrases of exactly 3 to 5 words each.
 3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission" , "Grab Me"). 
-4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියල් 5000").
-5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing (e.g., keep "direct වැඩගන්න", "බාස්" , "වැඩ").
-6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
-7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text. You are writing modern, fast-paced video captions. No punctuation allowed.
-8. THE DIRECTOR'S CUT (CRITICAL): You are editing a viral video. You have a strict budget of exactly 5 to 8 cinematic camera flashes. Place a pipe symbol "|" at the end of a phrase ONLY when one of these specific narrative beats happens:
-   - THE HOOK: The very first attention-grabbing statement or question.
-   - THE HARSH TRUTH / CORE MESSAGE: Dropping a heavy fact, a big number, or a controversial statement (e.g., "ලොකුම scam එකක් |").
-   - THE VOCAL SHIFT: When the speaker takes a noticeable breath, drops their tone, or pauses slightly before changing the topic.
-   DO NOT place a "|" just because a sentence ended. DO NOT exceed 8 pipes in total.
+4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "\u0dbb\u0dd4\u0db4\u0dd2\u0dba\u0dbd\u0ec0 5000").
+5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing.
+6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, \u0db6\u0dcf\u0dc3\u0dca.
+7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text.
+8. THE DIRECTOR'S CUT (CRITICAL): Place a pipe symbol "|" at the end of a phrase ONLY at key narrative beats.
+   DO NOT exceed 8 pipes in total.
 
 You must provide the approximate start and end times for each phrase in seconds.
-Output strictly as a JSON array. Example:
-[
-  {{"phrase": "ඔයාගෙත් leak වෙනවද |", "start": 0.1, "end": 1.2}},
-  {{"phrase": "ඔව් මං මේ කියන්නේ", "start": 1.3, "end": 2.2}},
-  {{"phrase": "රුපියල් 5000ක් නිකන්ම |", "start": 2.3, "end": 3.5}}
-]
+Output strictly as a JSON array.
 Do not include any markdown formatting. Just the raw JSON array."""
 
         print("[PROMPT_START]")
         print(prompt)
         print("[PROMPT_END]")
-        
         if os.path.exists(temp_audio): os.remove(temp_audio)
         return
 
+    # ─── MAIN PIPELINE SEQUENCE ───────────────────────────────────────────────
+    # Canonical order per the MD spec. Do NOT change without understanding deps.
     current_video = video_path
 
+    # STEP 1: Stabilize on RAW footage FIRST
+    # Must run before audio merge / silence removal so the motion data
+    # is extracted from the original, uncut clip — no frame-gap artifacts.
+    if options.get("stabilizerEngine") or options.get("motionTracking"):
+        current_video = stage_fast_stabilize(current_video, options)
+
+    # STEP 2: Merge Studio Audio (cleansed Adobe Podcast track)
     if options.get("mergeEngine"):
         current_video = stage_merge_audio(current_video, options)
 
+    # STEP 3: Remove Dead Air / Jump Cuts
     if options.get("removeSilence"):
         current_video = stage_remove_silence(current_video, options)
-        
-    if options.get("extractMp3"):
-        current_video = stage_mp4_to_mp3(current_video, options)
- 
+
+    # STEP 4: Background FX + Sandwich Text
+    # Single-pass FFmpeg filtergraph — multi-scene BG, chroma key, subject comp.
     if options.get("blurBackground"):
-        current_video = stage_background_fx(current_video, options) 
+        current_video = stage_background_fx(current_video, options)
 
-    if options.get("cinematicColor"):
-        current_video = stage_cinematic_color(current_video, options)
-
-    if options.get("cinematicGrade") and options.get("cinematicGrade") != "none":
-        current_video = stage_cinematic_grade(current_video, options)
-
-    if options.get("hookEngine"):
-        if options.get("startingHook") and options.get("startingHook") != "none":
-            current_video = stage_starting_hook(current_video, options)
-
-        if options.get("hookPrimaryText") or options.get("hookSecondaryText"):
-            current_video = stage_visual_hook(current_video, options)
-
-    if options.get("aiBroll"):
-        current_video = stage_ai_broll(current_video, options)
-
-    if options.get("studioAudio"):
-        current_video = stage_studio_audio(current_video)
-
+    # STEP 5: Semantic Smart Zoom
     if options.get("autoZoom"):
-        current_video = stage_semantic_zoom(current_video, options)  
+        current_video = stage_semantic_zoom(current_video, options)
 
-    if options.get("applyBeautyFilter"):
-        current_video = stage_beauty_filter(current_video, options)
+    # STEP 6: (Moved to absolute end)
 
+    # STEP 7: Cinematic Bottom Glow (global — applied after grade)
     if options.get("bottomGlow"):
         color = options.get("glowColor", "#000000")
         current_video = stage_bottom_glow(current_video, color)
 
+    # STEP 8: Hook Engine (pattern interrupt text + starting hook animation)
+    if options.get("hookEngine"):
+        if options.get("startingHook") and options.get("startingHook") != "none":
+            current_video = stage_starting_hook(current_video, options)
+        if options.get("hookPrimaryText") or options.get("hookSecondaryText"):
+            current_video = stage_visual_hook(current_video, options)
+
+    # STEP 9: AI B-Roll
+    if options.get("aiBroll"):
+        current_video = stage_ai_broll(current_video, options)
+
+    # STEP 10: Studio Audio Enhancement / MP3 Export
+    if options.get("studioAudio"):
+        current_video = stage_studio_audio(current_video)
+
+    if options.get("extractMp3"):
+        current_video = stage_mp4_to_mp3(current_video, options)
+
+    # STEP 11: Beauty Filter
+    if options.get("applyBeautyFilter"):
+        current_video = stage_beauty_filter(current_video, options)
+
+    # STEP 12: Captions (burn on the fully composited + graded frame)
     if options.get("burnCaptions"):
         if options.get("captionLanguage") == "si":
             current_video = stage_burn_sinhala_captions(current_video, options)
         else:
             current_video = stage_burn_captions(current_video, options)
 
+    # STEP 13: Auto Transitions / Camera Flashes
     if options.get("autoTransitions"):
         current_video = stage_hardcode_flash(current_video, options)
 
-    if options.get("stabilizerEngine") or options.get("motionTracking"):
-        current_video = stage_fast_stabilize(current_video, options)
-
+    # STEP 14: Export Caption Overlay JSON
     if options.get("exportCaptionOverlay"):
         lang = options.get("captionLanguage", "en")
         if lang == "si":
@@ -3892,11 +3846,31 @@ Do not include any markdown formatting. Just the raw JSON array."""
         else:
             export_captions_overlay_en(current_video, options)
 
-    print(f"\n[🚀] PIPELINE COMPLETE. Final output: {current_video}")
+    # -- FINAL STEP: Algorithmic Color Grade --
+    # Applied at the absolute end to seamlessly grade both subject and background together.
+    if options.get("cinematicColor"):
+        current_video = stage_cinematic_color(current_video, options)
+
+    if options.get("cinematicGrade") and options.get("cinematicGrade") != "none":
+        current_video = stage_cinematic_grade(current_video, options)
+
+    print(f"\n[\U0001f680] PIPELINE COMPLETE. Final output: {current_video}")
+
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 2:
-        run_pipeline(sys.argv[1], sys.argv[2])
-    else:
-        print("Usage: pipeline.py <video_path> <options_json>")
+    if len(sys.argv) < 3:
+        print("[X] Usage: python pipeline.py <video_path> <options_json>")
+        sys.exit(1)
+
+    video_path_arg   = sys.argv[1]
+    options_json_arg = sys.argv[2]
+
+    try:
+        run_pipeline(video_path_arg, options_json_arg)
+    except Exception as e:
+        import traceback
+        print(f"[X] PIPELINE CRASHED: {e}")
+        traceback.print_exc()
+        sys.exit(1)
+
