@@ -139,7 +139,17 @@ def stage_remove_silence(video_path: str, options: dict = None) -> str:
     )
 
     audio = AudioSegment.from_wav(temp_wav)
-    nonsilent_chunks = detect_nonsilent(audio, min_silence_len=400, silence_thresh=-42)
+    vid_stem = os.path.splitext(os.path.basename(video_path))[0]
+    chunks_json_path = os.path.join(base_dir, f"_silence_chunks_{vid_stem}.json")
+    
+    if os.path.exists(chunks_json_path):
+        print("[⚙️] Loading pre-calculated jump cuts from Phase 1 to guarantee 100% caption sync...")
+        with open(chunks_json_path, "r") as f:
+            nonsilent_chunks = json.load(f)
+    else:
+        nonsilent_chunks = detect_nonsilent(audio, min_silence_len=400, silence_thresh=-42)
+        with open(chunks_json_path, "w") as f:
+            json.dump(nonsilent_chunks, f)
 
     if not nonsilent_chunks:
         if os.path.exists(temp_wav): os.remove(temp_wav)
@@ -2372,61 +2382,80 @@ def stage_semantic_zoom(video_path: str, zoom_options: dict) -> str:
         return video_path
 
 
-# ─────────────────────────────────────────────
-# 13. AUTO TRANSITIONS ENGINE
-# ─────────────────────────────────────────────
-
-def stage_scene_transitions(video_path: str, options: dict) -> str:
+def stage_alternating_zoom(video_path: str, options: dict) -> str:
     import os
     import json
     import subprocess
     
-    print("[⚙️] Injecting 0.3s Elastic Slide & Flash Transitions...")
+    print("[⚙️] Adding Alternating Camera Angles (Zoom) to Composited Backgrounds...")
     base_dir   = os.path.dirname(os.path.abspath(video_path))
-    output_vid = os.path.splitext(video_path)[0] + "_transitions.mp4"
+    output_vid = os.path.splitext(video_path)[0] + "_cam_angles.mp4"
     json_path  = os.path.join(base_dir, "_flash_times.json")
-
+    
     flash_times = []
     if os.path.exists(json_path):
         with open(json_path, "r") as f:
             flash_times = json.load(f)
-        os.remove(json_path)
-
+            
     if not flash_times:
-        print("[⚙️] No cuts detected. Skipping transitions.")
+        print("[⚙️] No cuts detected. Skipping Alternating Zoom.")
+        return video_path
+        
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height,r_frame_rate,duration",
+             "-of", "json", video_path],
+            capture_output=True, text=True
+        )
+        info = json.loads(probe.stdout)["streams"][0]
+        W, H = int(info["width"]), int(info["height"])
+        fps_str = info.get("r_frame_rate", "30/1")
+        try:
+            num, den = fps_str.split('/')
+            fps = int(num) / int(den)
+        except Exception:
+            fps = 30.0
+            
+        try:
+            total_dur = float(info.get("duration", 9999.0))
+        except Exception:
+            total_dur = 9999.0
+            
+    except Exception as e:
+        print(f"[❌] Failed to probe video for Zoom: {e}")
         return video_path
 
-    print(f"[🎬] Found {len(flash_times)} cuts. Rendering REAL FFmpeg Engine for Elastic Snap & Flash...")
-
-    # We will split the video at cut times, apply the transition math to the incoming scene, 
-    # and then concat them back together.
+    cut_points = [0.0] + list(flash_times) + [total_dur]
     
-    filter_complex = f"[0:v]split={len(flash_times)+1}"
-    for i in range(len(flash_times)+1):
+    zoom_speed = 0.08 / fps
+    filter_complex = f"[0:v]split={len(cut_points)-1}"
+    for i in range(len(cut_points)-1):
         filter_complex += f"[v{i}]"
     filter_complex += ";"
     
-    last_t = 0.0
-    for i, t in enumerate(flash_times):
-        filter_complex += f"[v{i}]trim=start={last_t}:end={t},setpts=PTS-STARTPTS[seg{i}];"
-        last_t = t
-    filter_complex += f"[v{len(flash_times)}]trim=start={last_t},setpts=PTS-STARTPTS[seg{len(flash_times)}];"
+    for i in range(len(cut_points)-1):
+        t_start = cut_points[i]
+        t_end   = cut_points[i+1]
+        v_base = f"[v{i}]trim=start={t_start:.3f}:end={t_end:.3f},setpts=PTS-STARTPTS"
+        
+        # Apply zoompan to every odd segment
+        if i % 2 == 1:
+            z_expr = f"min(pzoom+{zoom_speed:.5f},1.15)"
+            x_expr = f"({W}-({W}/zoom))/2"
+            y_expr = f"({H}-({H}/zoom))/2"
+            v_filter = f"{v_base},zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':d=1:s={W}x{H}:fps={fps},setsar=1[seg{i}];"
+        else:
+            v_filter = f"{v_base},setsar=1[seg{i}];"
+            
+        filter_complex += v_filter
 
-    # Now apply the transition math to every incoming segment (seg 1 to n)
-    concat_inputs = "[seg0]"
-    
-    for i in range(1, len(flash_times)+1):
-        elastic_x_expr = "w * exp(-7*(t/0.3)) * cos(15*(t/0.3))"
-        blur_expr = "boxblur=lr=if(lte(t,0.3), 20*(1-(t/0.3)), 0):lp=0"
-        flash_expr = "eq=brightness='if(lte(t,0.3), 0.8 * (1 - (t/0.3)), 0)'"
+    concat_inputs = ""
+    for i in range(len(cut_points)-1):
+        concat_inputs += f"[seg{i}]"
         
-        filter_complex += f"color=c=black:s=1080x1920:d=10[bg{i}];"
-        overlay_cmd = f"overlay=x='{elastic_x_expr}':y=0:shortest=1"
-        filter_complex += f"[bg{i}][seg{i}]{overlay_cmd},{blur_expr},{flash_expr}[trans{i}];"
-        
-        concat_inputs += f"[trans{i}]"
-    
-    filter_complex += f"{concat_inputs}concat=n={len(flash_times)+1}:v=1:a=0[outv]"
+    filter_complex += f"{concat_inputs}concat=n={len(cut_points)-1}:v=1:a=0[outv]"
+
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
@@ -2440,12 +2469,193 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
     
     try:
         subprocess.run(cmd, check=True, capture_output=True)
-        print(f"[✅] Elastic Slide & Flash transition rendered successfully: {output_vid}")
+        print(f"[✅] Alternating Camera Angles applied: {output_vid}")
         return output_vid
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
-        print(f"[❌] Transitions failed: {err_msg}")
+        print(f"[❌] Camera Angles failed: {err_msg}")
         return video_path
+
+
+# ─────────────────────────────────────────────
+# 13. AUTO TRANSITIONS ENGINE
+# ─────────────────────────────────────────────
+
+def stage_scene_transitions(video_path: str, options: dict) -> str:
+    """
+    
+    1. Extracts video to JPEG sequence (Guarantees 100% perfect lip-sync/PTS).
+    2. Modifies only the frames around cut points in-place.
+    3. Implements "The Flash" edge-pixel stretching (rubber band motion blur).
+    4. Seamless crossfade + brightness spike to hide all hard lines.
+    5. Re-encodes back to MP4 instantly.
+    """
+    import os, json, subprocess, math, shutil
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        print("[❌] OpenCV not found. Skipping transitions.")
+        return video_path
+    
+    print("[⚙️] Injecting Cinematic 'Flash' Elastic Stretch Transitions...")
+    base_dir   = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_transitions.mp4"
+    json_path  = os.path.join(base_dir, "_flash_times.json")
+    frames_dir = os.path.join(base_dir, "_trans_frames")
+
+    flash_times = []
+    if os.path.exists(json_path):
+        with open(json_path, "r") as f:
+            flash_times = json.load(f)
+        os.remove(json_path)
+
+    if not flash_times:
+        print("[⚙️] No cuts detected. Skipping transitions.")
+        return video_path
+
+    # ── 1. Probe source video ───────────────────────────────────────────────
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height,r_frame_rate",
+         "-of", "json", video_path],
+        capture_output=True, text=True
+    )
+    info = json.loads(probe.stdout)["streams"][0]
+    W, H = int(info["width"]), int(info["height"])
+    fps_str = info.get("r_frame_rate", "30/1")
+    try:
+        num, den = fps_str.split('/')
+        FPS = int(num) / int(den)
+    except Exception:
+        FPS = 30.0
+
+    TRANS_SECS = 0.35
+    TRANS_FRAMES = max(6, int(TRANS_SECS * FPS))
+    HALF_TRANS = TRANS_FRAMES // 2
+
+    # ── 2. Extract JPEG Sequence (Ultra-Fast) ───────────────────────────────
+    print("[⚙️] Extracting frame sequence for zero-drift sync...")
+    os.makedirs(frames_dir, exist_ok=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", video_path,
+        "-qscale:v", "2",
+        os.path.join(frames_dir, "%06d.jpg")
+    ], check=True, capture_output=True)
+
+    # ── 3. Transition Math (The Flash Stretch + Spring) ─────────────────────
+    DAMPING = 7.0
+    FREQUENCY = 14.0
+
+    def get_stretched_a(frame, t_norm):
+        # Accelerates left: t^1.5 curve
+        a_x = int(-W * (t_norm ** 1.5))
+        canvas = np.zeros_like(frame)
+        if a_x == 0:
+            return frame
+        if a_x <= -W:
+            # Fully stretched off screen — just fill with last column
+            col = frame[:, -1:]
+            return cv2.resize(col, (W, H))
+            
+        src_x = -a_x
+        canvas[:, :W-src_x] = frame[:, src_x:]
+        
+        # Rubber band stretch the remaining gap
+        last_col = frame[:, -1:]
+        stretched = cv2.resize(last_col, (src_x, H))
+        canvas[:, W-src_x:] = stretched
+        return canvas
+
+    def get_stretched_b(frame, t_norm):
+        # Springs in from right
+        offset = W * math.exp(-DAMPING * t_norm) * math.cos(FREQUENCY * t_norm)
+        b_x = int(offset)
+        canvas = np.zeros_like(frame)
+        
+        if b_x <= 0:
+            return frame
+        if b_x >= W:
+            col = frame[:, :1]
+            return cv2.resize(col, (W, H))
+            
+        canvas[:, b_x:] = frame[:, :W-b_x]
+        
+        # Rubber band stretch the head gap
+        first_col = frame[:, :1]
+        stretched = cv2.resize(first_col, (b_x, H))
+        canvas[:, :b_x] = stretched
+        return canvas
+
+    # ── 4. Apply Transitions In-Place ───────────────────────────────────────
+    print(f"[🎬] Applying elastic blur to {len(flash_times)} jump cuts...")
+    
+    total_extracted = len([f for f in os.listdir(frames_dir) if f.endswith(".jpg")])
+    white_screen = np.full((H, W, 3), 255, dtype=np.uint8)
+
+    for t_cut in flash_times:
+        # FFmpeg image sequences start at index 1
+        cut_frame_idx = max(1, int(t_cut * FPS))
+        
+        start_idx = max(1, cut_frame_idx - HALF_TRANS)
+        end_idx   = min(total_extracted, cut_frame_idx + HALF_TRANS)
+        
+        # Freeze the frames at the boundary to create the clean stretch effect
+        a_frame_path = os.path.join(frames_dir, f"{start_idx:06d}.jpg")
+        b_frame_path = os.path.join(frames_dir, f"{end_idx:06d}.jpg")
+        
+        if not os.path.exists(a_frame_path) or not os.path.exists(b_frame_path):
+            continue
+            
+        frame_a = cv2.imread(a_frame_path)
+        frame_b = cv2.imread(b_frame_path)
+        
+        num_frames = end_idx - start_idx
+        if num_frames <= 0: continue
+
+        for i in range(num_frames):
+            curr_idx = start_idx + i
+            t_norm = i / max(1, num_frames - 1)
+            
+            a_stretched = get_stretched_a(frame_a, t_norm)
+            b_stretched = get_stretched_b(frame_b, t_norm)
+            
+            # Crossfade the two stretched canvases (hides the seam completely)
+            composite = cv2.addWeighted(a_stretched, 1.0 - t_norm, b_stretched, t_norm, 0)
+            
+            # The Flash Brightness Spike (peaks at center of transition)
+            flash_intensity = 1.0 - (abs(t_norm - 0.5) * 2) # 0 to 1 back to 0
+            # Apply max 70% white overlay
+            flash_alpha = flash_intensity * 0.70
+            
+            final = cv2.addWeighted(composite, 1.0 - flash_alpha, white_screen, flash_alpha, 0)
+            
+            # Overwrite the JPEG
+            out_path = os.path.join(frames_dir, f"{curr_idx:06d}.jpg")
+            cv2.imwrite(out_path, final)
+
+    # ── 5. Re-encode to MP4 (Zero Drift) ────────────────────────────────────
+    print("[⚙️] Re-compiling video sequence with original audio...")
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-framerate", str(FPS),
+        "-i", os.path.join(frames_dir, "%06d.jpg"),
+        "-i", video_path,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:a", "copy",
+        "-shortest",
+        output_vid
+    ], check=True, capture_output=True)
+
+    # Cleanup
+    try:
+        shutil.rmtree(frames_dir)
+    except Exception:
+        pass
+
+    print(f"[✅] Elastic 'Flash' transition complete: {output_vid}")
+    return output_vid
 
 def stage_hardcode_flash(video_path: str, options: dict) -> str:
     print("[⚙️] Loading AI Director timestamps for Camera Flashes...")
@@ -3916,10 +4126,7 @@ Do not include any markdown formatting. Just the raw JSON array."""
     if options.get("blurBackground"):
         current_video = stage_background_fx(current_video, options)
 
-    # 5. Semantic Smart Zoom
-    if options.get("autoZoom"):
-        current_video = stage_semantic_zoom(current_video, options)
-        
+    # 5. Semantic Smart Zoom (Handled in Chopper now)
     # 6. Hook Engine
     if options.get("hookEngine"):
         if options.get("startingHook") and options.get("startingHook") != "none":

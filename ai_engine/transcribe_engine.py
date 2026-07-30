@@ -42,13 +42,15 @@ def generate_srt(video_path, options):
             )
         
         segments = []
+        # Groq verbose_json returns segments as plain dicts, not attribute objects
         for seg in transcription.segments:
-            # Groq returns objects, not dicts in the python SDK
-            phrase = seg.text.strip()
+            phrase = seg.get("text", "").strip() if isinstance(seg, dict) else seg.text.strip()
+            start  = seg.get("start", 0.0)       if isinstance(seg, dict) else seg.start
+            end    = seg.get("end", 0.0)         if isinstance(seg, dict) else seg.end
             if phrase:
                 segments.append({
-                    "start": seg.start,
-                    "end": seg.end,
+                    "start": start,
+                    "end":   end,
                     "phrase": phrase
                 })
         
