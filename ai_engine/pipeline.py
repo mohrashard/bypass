@@ -1854,14 +1854,40 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
                 if os.path.exists(f): os.remove(f)
             return video_path
 
+        # Standard Swoosh for Text Slide Up Sandwich
+        engine_dir = os.path.dirname(os.path.abspath(__file__))
+        swoosh_sfx = os.path.join(engine_dir, "assets", "Standard Swoosh.wav")
+        swoosh_times = []
+        for scene in timeline_scenes:
+            if scene.get("textBehind", "").strip():
+                swoosh_times.append(float(scene.get("timestamp", 0.0)))
+
         audio_idx = num_inputs
         inputs.extend(["-i", temp_audio])
+        num_inputs += 1
+        
+        audio_map = f"{audio_idx}:a?"
+        
+        if os.path.exists(swoosh_sfx) and swoosh_times:
+            swoosh_idx = num_inputs
+            inputs.extend(["-i", swoosh_sfx])
+            num_inputs += 1
+            
+            filter_complex += f"[{audio_idx}:a]volume=1.0[main_a];"
+            mix_inputs = "[main_a]"
+            for i, t in enumerate(swoosh_times):
+                delay_ms = int(max(0, t) * 1000)
+                filter_complex += f"[{swoosh_idx}:a]adelay={delay_ms}|{delay_ms}[swoosh_{i}];"
+                mix_inputs += f"[swoosh_{i}]"
+            total_audios = len(swoosh_times) + 1
+            filter_complex += f"{mix_inputs}amix=inputs={total_audios}:duration=first:dropout_transition=2:normalize=0[mixed_a];"
+            audio_map = "[mixed_a]"
 
         print(f"[⚙️] Running ultra-fast FFmpeg render pipeline (Multi-Scene + Sandwich) → {out_w}x{out_h}...")
         cmd = [
             "ffmpeg", *inputs,
             "-filter_complex", filter_complex,
-            "-map", "[outv]", "-map", f"{audio_idx}:a?",
+            "-map", "[outv]", "-map", audio_map,
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-c:a", "aac", "-b:a", "192k",
             "-shortest", output_vid, "-y"
@@ -2305,6 +2331,81 @@ def stage_semantic_zoom(video_path: str, zoom_options: dict) -> str:
 # 13. AUTO TRANSITIONS ENGINE
 # ─────────────────────────────────────────────
 
+def stage_scene_transitions(video_path: str, options: dict) -> str:
+    import os
+    import json
+    import subprocess
+    
+    print("[⚙️] Injecting 0.3s Elastic Slide & Flash Transitions...")
+    base_dir   = os.path.dirname(os.path.abspath(video_path))
+    output_vid = os.path.splitext(video_path)[0] + "_transitions.mp4"
+    json_path  = os.path.join(base_dir, "_flash_times.json")
+
+    flash_times = []
+    if os.path.exists(json_path):
+        with open(json_path, "r") as f:
+            flash_times = json.load(f)
+        os.remove(json_path)
+
+    if not flash_times:
+        print("[⚙️] No cuts detected. Skipping transitions.")
+        return video_path
+
+    print(f"[🎬] Found {len(flash_times)} cuts. Rendering REAL FFmpeg Engine for Elastic Snap & Flash...")
+
+    # We will split the video at cut times, apply the transition math to the incoming scene, 
+    # and then concat them back together.
+    
+    filter_complex = f"[0:v]split={len(flash_times)+1}"
+    for i in range(len(flash_times)+1):
+        filter_complex += f"[v{i}]"
+    filter_complex += ";\\n"
+    
+    last_t = 0.0
+    for i, t in enumerate(flash_times):
+        filter_complex += f"[v{i}]trim=start={last_t}:end={t},setpts=PTS-STARTPTS[seg{i}];\\n"
+        last_t = t
+    filter_complex += f"[v{len(flash_times)}]trim=start={last_t},setpts=PTS-STARTPTS[seg{len(flash_times)}];\\n"
+
+    # Now apply the transition math to every incoming segment (seg 1 to n)
+    concat_inputs = "[seg0]"
+    
+    for i in range(1, len(flash_times)+1):
+        elastic_x_expr = "w * exp(-7*(t/0.3)) * cos(15*(t/0.3))"
+        blur_expr = "boxblur=lr=if(lte(t,0.3), 20*(1-(t/0.3)), 0):lp=0"
+        flash_expr = "eq=brightness='if(lte(t,0.3), 0.8 * (1 - (t/0.3)), 0)'"
+        
+        filter_complex += f"color=c=black:s=1080x1920:d=10[bg{i}];\\n"
+        overlay_cmd = f"overlay=x='{elastic_x_expr}':y=0:shortest=1"
+        filter_complex += f"[bg{i}][seg{i}]{overlay_cmd},{blur_expr},{flash_expr}[trans{i}];\\n"
+        
+        concat_inputs += f"[trans{i}]"
+    
+    filter_complex += f"{concat_inputs}concat=n={len(flash_times)+1}:v=1:a=0[outv]"
+    
+    # We must replace \\n with actual \n before executing since we escaped them to avoid string literal errors
+    filter_complex = filter_complex.replace("\\\\n", "\\n")
+    
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-filter_complex", filter_complex,
+        "-map", "[outv]",
+        "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:a", "copy",
+        output_vid
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        print(f"[✅] Elastic Slide & Flash transition rendered successfully: {output_vid}")
+        return output_vid
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        print(f"[❌] Transitions failed: {err_msg}")
+        return video_path
+
 def stage_hardcode_flash(video_path: str, options: dict) -> str:
     print("[⚙️] Loading AI Director timestamps for Camera Flashes...")
     base_dir   = os.path.dirname(os.path.abspath(video_path))
@@ -2312,7 +2413,7 @@ def stage_hardcode_flash(video_path: str, options: dict) -> str:
     json_path  = os.path.join(base_dir, "_flash_times.json")
 
     engine_dir = os.path.dirname(os.path.abspath(__file__))
-    sfx_audio  = os.path.join(engine_dir, "assets", "whoosh_sfx.MP3")
+    sfx_audio  = os.path.join(engine_dir, "assets", "fast woosh.mp3")
 
     flash_times = []
     if os.path.exists(json_path):
@@ -2353,7 +2454,7 @@ def stage_hardcode_flash(video_path: str, options: dict) -> str:
         )
         audio_map = "[a_final]"
     else:
-        print("[⚠️] whoosh_sfx.MP3 missing. Visual flash only.")
+        print("[⚠️] fast woosh.mp3 missing. Visual flash only.")
 
     cmd = ["ffmpeg"] + inputs
     if has_sfx:
@@ -3645,7 +3746,7 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
             shift_y = smoothed_y - initial_y
             
             # Allow larger shifts, but clamp smoothly
-            max_shift_px = float(width * 0.08) # 8% of width
+            max_shift_px = float(width * 0.25) # 25% of width Jump-Cut Protection
             shift_x = _soft_clip(shift_x, max_shift_px)
             shift_y = _soft_clip(shift_y, max_shift_px)
         else:
@@ -3715,24 +3816,33 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
 # ─────────────────────────────────────────────
 # 19. MAIN PIPELINE ORCHESTRATOR
 # ─────────────────────────────────────────────
+def stage_global_motion_tracking(video_path: str, options: dict) -> str:
+    # A lightweight wrapper that runs stage_fast_stabilize in motion_tracking mode
+    # on the fully composited video to create a cinematic handheld feel.
+    print("\n[🎥] Activating Global Handheld Motion Tracking...")
+    mt_options = options.copy()
+    mt_options["motionTracking"] = True
+    mt_options["zoomScale"] = 1.12 # Zoom slightly to allow sway margin
+    return stage_fast_stabilize(video_path, mt_options)
+
 def run_pipeline(video_path: str, options_json: str) -> None:
     import json as _json
     options = _json.loads(options_json)
-    print(f"\n[\U0001f3ac] STARTING LOCAL RENDER ENGINE: {os.path.basename(video_path)}\n")
+    print(f"\n[🎬] STARTING LOCAL RENDER ENGINE: {os.path.basename(video_path)}\n")
 
     if not os.path.exists(video_path):
-        print(f"[\u274c] FATAL: Input file not found: {video_path}")
+        print(f"[❌] FATAL: Input file not found: {video_path}")
         print("Please re-select the file in the UI.")
         return
 
     if options.get("enhanceAiImage"):
-        print("\n[\U0001f3ac] RUNNING AI IMAGE ENHANCEMENT...")
+        print("\n[🎬] RUNNING AI IMAGE ENHANCEMENT...")
         result = stage_enhance_ai_image(video_path)
-        print(f"\n[\U0001f680] PIPELINE COMPLETE. Final output: {result}")
+        print(f"\n[🚀] PIPELINE COMPLETE. Final output: {result}")
         return
 
     if options.get("generatePromptOnly"):
-        print("\n[\U0001f3ac] GENERATING SMART PROMPT...")
+        print("\n[🎬] GENERATING SMART PROMPT...")
         import subprocess as _sp
         base_dir = os.path.dirname(os.path.abspath(video_path))
         temp_audio = os.path.join(base_dir, "_gemini_audio.wav")
@@ -3754,9 +3864,9 @@ CRITICAL RULES:
 1. DO NOT add words. DO NOT guess words. DO NOT fix broken sentences. If the audio mumbles, transcribe the mumble. Strictly stick to the voice.
 2. Break the text into short, logical phrases of exactly 3 to 5 words each.
 3. TRANSLITERATE ENGLISH: If an English technical word is spoken, type it in English letters (e.g., "AC", "pipe", "commission" , "Grab Me"). 
-4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "\u0dbb\u0dd4\u0db4\u0dd2\u0dba\u0dbd\u0ec0 5000").
+4. NUMBER FORMATTING: Convert all spoken numbers into actual digits (e.g., "රුපියලෙ 5000").
 5. SLANG CORRECTION: Fix casual Singlish slang ONLY IF it matches the audio timing.
-6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, \u0db6\u0dcf\u0dc3\u0dca.
+6. KEYWORDS: Professional field engineer, commission, field engineer, direct, scam, skill, follow, comment, බාස්.
 7. NO GRAMMAR/PUNCTUATION (CRITICAL): Do absolutely NOT use periods (.), commas (,), or question marks (?) anywhere in your text.
 8. THE DIRECTOR'S CUT (CRITICAL): Place a pipe symbol "|" at the end of a phrase ONLY at key narrative beats.
    DO NOT exceed 8 pipes in total.
@@ -3772,93 +3882,81 @@ Do not include any markdown formatting. Just the raw JSON array."""
         return
 
     # ─── MAIN PIPELINE SEQUENCE ───────────────────────────────────────────────
-    # Canonical order per the MD spec. Do NOT change without understanding deps.
     current_video = video_path
 
-    # STEP 1: Stabilize on RAW footage FIRST
-    # Must run before audio merge / silence removal so the motion data
-    # is extracted from the original, uncut clip — no frame-gap artifacts.
-    if options.get("stabilizerEngine") or options.get("motionTracking"):
+    # 1. Stabilize (Rigid Anchor on RAW)
+    if options.get("stabilizerEngine"):
         current_video = stage_fast_stabilize(current_video, options)
 
-    # STEP 2: Merge Studio Audio (cleansed Adobe Podcast track)
+    # 2. Merge Studio Audio
     if options.get("mergeEngine"):
         current_video = stage_merge_audio(current_video, options)
 
-    # STEP 3: Remove Dead Air / Jump Cuts
-    if options.get("removeSilence"):
-        current_video = stage_remove_silence(current_video, options)
-
-    # STEP 4: Background FX + Sandwich Text
-    # Single-pass FFmpeg filtergraph — multi-scene BG, chroma key, subject comp.
+    # 3. Background FX + Sandwich Text (Based on UI Timeline)
     if options.get("blurBackground"):
         current_video = stage_background_fx(current_video, options)
 
-    # STEP 5: Semantic Smart Zoom
+    # 4. Remove Dead Air / Jump Cuts (Chops the composited video!)
+    if options.get("removeSilence"):
+        current_video = stage_remove_silence(current_video, options)
+
+    # 5. Semantic Smart Zoom
     if options.get("autoZoom"):
         current_video = stage_semantic_zoom(current_video, options)
-
-    # STEP 6: (Moved to absolute end)
-
-    # STEP 7: Cinematic Bottom Glow (global — applied after grade)
-    if options.get("bottomGlow"):
-        color = options.get("glowColor", "#000000")
-        current_video = stage_bottom_glow(current_video, color)
-
-    # STEP 8: Hook Engine (pattern interrupt text + starting hook animation)
+        
+    # 6. Hook Engine
     if options.get("hookEngine"):
         if options.get("startingHook") and options.get("startingHook") != "none":
             current_video = stage_starting_hook(current_video, options)
         if options.get("hookPrimaryText") or options.get("hookSecondaryText"):
             current_video = stage_visual_hook(current_video, options)
 
-    # STEP 9: AI B-Roll
+    # 7. AI B-Roll
     if options.get("aiBroll"):
         current_video = stage_ai_broll(current_video, options)
 
-    # STEP 10: Studio Audio Enhancement / MP3 Export
+    # 8. Studio Audio Enhancement
     if options.get("studioAudio"):
         current_video = stage_studio_audio(current_video)
 
     if options.get("extractMp3"):
         current_video = stage_mp4_to_mp3(current_video, options)
 
-    # STEP 11: Beauty Filter
+    # 9. Beauty Filter
     if options.get("applyBeautyFilter"):
         current_video = stage_beauty_filter(current_video, options)
 
-    # STEP 12: Captions (burn on the fully composited + graded frame)
+    # 10. Captions (Transcribes the ALREADY chopped video, meaning timestamps map perfectly!)
     if options.get("burnCaptions"):
         if options.get("captionLanguage") == "si":
             current_video = stage_burn_sinhala_captions(current_video, options)
         else:
             current_video = stage_burn_captions(current_video, options)
-
-    # STEP 13: Auto Transitions / Camera Flashes
+            
+    # 11. Auto Transitions (Elastic Stretch & Flash based on perfectly mapped _flash_times.json)
     if options.get("autoTransitions"):
-        current_video = stage_hardcode_flash(current_video, options)
+        current_video = stage_scene_transitions(current_video, options)
 
-    # STEP 14: Export Caption Overlay JSON
-    if options.get("exportCaptionOverlay"):
-        lang = options.get("captionLanguage", "en")
-        if lang == "si":
-            export_captions_overlay_si(current_video, options)
-        else:
-            export_captions_overlay_en(current_video, options)
+    # 12. Global Handheld Motion Tracking (Simulates a human operator on the whole scene)
+    if options.get("motionTracking"):
+        current_video = stage_global_motion_tracking(current_video, options)
 
-    # -- FINAL STEP: Algorithmic Color Grade --
-    # Applied at the absolute end to seamlessly grade both subject and background together.
+    # 13. Cinematic Color Grade & M22 Rescue
     if options.get("cinematicColor"):
         current_video = stage_cinematic_color(current_video, options)
-
     if options.get("cinematicGrade") and options.get("cinematicGrade") != "none":
         current_video = stage_cinematic_grade(current_video, options)
 
-    print(f"\n[\U0001f680] PIPELINE COMPLETE. Final output: {current_video}")
+    # 14. Bottom Glow
+    if options.get("bottomGlow"):
+        color = options.get("glowColor", "#000000")
+        current_video = stage_bottom_glow(current_video, color)
 
+    print(f"\\n[🚀] PIPELINE COMPLETE. Final output: {current_video}")
 
 
 if __name__ == "__main__":
+    import sys
     if len(sys.argv) < 3:
         print("[X] Usage: python pipeline.py <video_path> <options_json>")
         sys.exit(1)
@@ -3873,4 +3971,3 @@ if __name__ == "__main__":
         print(f"[X] PIPELINE CRASHED: {e}")
         traceback.print_exc()
         sys.exit(1)
-
