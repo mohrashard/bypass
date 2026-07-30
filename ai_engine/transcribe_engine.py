@@ -21,22 +21,34 @@ def generate_srt(video_path, options):
     temp_audio = os.path.join(base_dir, "_temp_whisper_audio.wav")
     extract_audio(chopped_video, temp_audio)
 
-    print("\n[🤖] Booting Local Whisper Model...")
+    print("\n[🤖] Booting Groq Whisper-Large-V3 Model for Perfect Accuracy...")
     try:
-        import whisper
-        # Using "base" for speed, as the user said "fastest whisper model possible"
-        # They mentioned "i have installed whisper model"
-        model = whisper.load_model("base")
-        print("[⚙️] Transcribing audio...")
-        result = model.transcribe(temp_audio, word_timestamps=True)
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+        groq_api_key = os.environ.get("GROQ_API_KEY")
+        
+        if not groq_api_key:
+            raise Exception("GROQ_API_KEY not found in .env! Cannot use Cloud Whisper.")
+
+        from groq import Groq
+        client = Groq(api_key=groq_api_key)
+        
+        print("[⚙️] Transcribing audio instantly via Groq Cloud...")
+        with open(temp_audio, "rb") as file:
+            transcription = client.audio.transcriptions.create(
+                file=(os.path.basename(temp_audio), file.read()),
+                model="whisper-large-v3",
+                response_format="verbose_json"
+            )
         
         segments = []
-        for seg in result.get("segments", []):
-            phrase = seg["text"].strip()
+        for seg in transcription.segments:
+            # Groq returns objects, not dicts in the python SDK
+            phrase = seg.text.strip()
             if phrase:
                 segments.append({
-                    "start": seg["start"],
-                    "end": seg["end"],
+                    "start": seg.start,
+                    "end": seg.end,
                     "phrase": phrase
                 })
         
@@ -53,7 +65,7 @@ def generate_srt(video_path, options):
         print("__JSON_END__")
         
     except Exception as e:
-        print(f"[❌] Whisper failed: {e}")
+        print(f"[❌] Whisper API failed: {e}")
         import traceback
         traceback.print_exc()
 
@@ -87,7 +99,7 @@ CRITICAL RULES:
 1. Fix the spelling of the phrases in the JSON to perfectly match the PERFECT SCRIPT.
 2. DO NOT change the "start" or "end" timestamps. Keep them exactly as they are.
 3. You MUST output the EXACT SAME NUMBER of objects as the RAW WHISPER JSON ({len(raw_segments)} items). Do NOT add extra segments at the end. Do NOT invent new timestamps.
-4. If the PERFECT SCRIPT has the pipe symbol "|" for a director's cut, you MUST include it at the end of the corresponding phrase in the JSON.
+4. EXTREMELY IMPORTANT: The PERFECT SCRIPT contains pipe symbols ("|") which indicate scene cuts. YOU ABSOLUTELY MUST include these "|" characters at the exact same locations in your JSON output! Do NOT delete the "|" characters! If a phrase ends with a pipe in the script, it MUST end with a pipe in your JSON!
 5. Output MUST be ONLY a raw JSON array of objects with "start", "end", and "phrase". NO markdown formatting. No conversational text. Just the JSON array.
 """
     try:
