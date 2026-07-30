@@ -13,49 +13,54 @@ def extract_audio(video_path, out_audio):
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def generate_srt(video_path, options):
-    print("\n[🎬] Extracting Audio for Whisper...")
+    import urllib.request
+    import urllib.error
+    from dotenv import load_dotenv
+    
+    print("\n[🎬] Extracting Audio for Deepgram...")
     base_dir = os.path.dirname(os.path.abspath(video_path))
     temp_audio = os.path.join(base_dir, "_temp_whisper_audio.wav")
     extract_audio(video_path, temp_audio)
 
-    print("\n[🤖] Booting Groq Whisper-Large-V3 Model for Perfect Accuracy...")
+    print("\n[🤖] Booting Deepgram Nova-2 (Perfect Word Sync)...")
     try:
-        from dotenv import load_dotenv
         load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
-        groq_api_key = os.environ.get("GROQ_API_KEY")
+        dg_api_key = os.environ.get("DEEP_GRAM")
         
-        if not groq_api_key:
-            raise Exception("GROQ_API_KEY not found in .env! Cannot use Cloud Whisper.")
+        if not dg_api_key:
+            raise Exception("DEEP_GRAM key not found in .env! Cannot use Deepgram.")
 
-        from groq import Groq
-        client = Groq(api_key=groq_api_key)
+        print("[⚙️] Transcribing audio instantly via Deepgram API...")
         
-        print("[⚙️] Transcribing audio instantly via Groq Cloud...")
-        with open(temp_audio, "rb") as file:
-            transcription = client.audio.transcriptions.create(
-                file=(os.path.basename(temp_audio), file.read()),
-                model="whisper-large-v3",
-                response_format="verbose_json"
-            )
+        url = "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&punctuate=true"
         
+        with open(temp_audio, "rb") as f:
+            audio_data = f.read()
+            
+        req = urllib.request.Request(url, data=audio_data, method="POST")
+        req.add_header("Authorization", f"Token {dg_api_key}")
+        req.add_header("Content-Type", "audio/wav")
+        
+        with urllib.request.urlopen(req) as response:
+            res_data = response.read()
+            dg_json = json.loads(res_data)
+            
         segments = []
-        # Groq verbose_json returns segments as plain dicts, not attribute objects
-        for seg in transcription.segments:
-            phrase = seg.get("text", "").strip() if isinstance(seg, dict) else seg.text.strip()
-            start  = seg.get("start", 0.0)       if isinstance(seg, dict) else seg.start
-            end    = seg.get("end", 0.0)         if isinstance(seg, dict) else seg.end
-            if phrase:
+        words = dg_json.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("words", [])
+        
+        for w in words:
+            word_text = w.get("punctuated_word", w.get("word", "")).strip()
+            if word_text:
                 segments.append({
-                    "start": start,
-                    "end":   end,
-                    "phrase": phrase
+                    "start": w["start"],
+                    "end":   w["end"],
+                    "phrase": word_text
                 })
         
         if os.path.exists(temp_audio):
             os.remove(temp_audio)
 
-        print("\n[✅] Transcription Complete!")
-        # Print JSON so frontend can capture it
+        print(f"\n[✅] Transcription Complete! Found {len(segments)} words.")
         print("__JSON_START__")
         print(json.dumps({
             "chopped_video": video_path,
@@ -63,8 +68,10 @@ def generate_srt(video_path, options):
         }))
         print("__JSON_END__")
         
+    except urllib.error.HTTPError as e:
+        print(f"[❌] Deepgram API failed ({e.code}): {e.read().decode()}")
     except Exception as e:
-        print(f"[❌] Whisper API failed: {e}")
+        print(f"[❌] Deepgram failed: {e}")
         import traceback
         traceback.print_exc()
 

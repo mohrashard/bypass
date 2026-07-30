@@ -221,6 +221,87 @@ def stage_remove_silence(video_path: str, options: dict = None) -> str:
     print(f"[✅] Cinematic Jump Cuts applied: {output_vid}")
     return output_vid
 
+def stage_chop_and_load(video_path: str, options: dict = None) -> str:
+    from pydub import AudioSegment
+    from pydub.silence import detect_nonsilent
+
+    print("[⚙️] Phase 2: Chopping Dead Air (No Zooms)...")
+    base_dir = os.path.dirname(os.path.abspath(video_path))
+    temp_wav = os.path.join(base_dir, "_silence_detect.wav")
+    output_vid = os.path.splitext(video_path)[0] + "_chopped.mp4"
+    script_path = os.path.join(base_dir, "_filter_script.txt")
+
+    subprocess.run(
+        ["ffmpeg", "-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", temp_wav, "-y"],
+        check=True, capture_output=True
+    )
+
+    audio = AudioSegment.from_wav(temp_wav)
+    vid_stem = os.path.splitext(os.path.basename(video_path))[0]
+    chunks_json_path = os.path.join(base_dir, f"_silence_chunks_{vid_stem}.json")
+    chopped_cuts_path = os.path.join(base_dir, "_chopped_cuts.json")
+    
+    if os.path.exists(chunks_json_path):
+        with open(chunks_json_path, "r") as f:
+            nonsilent_chunks = json.load(f)
+    else:
+        nonsilent_chunks = detect_nonsilent(audio, min_silence_len=400, silence_thresh=-42)
+        with open(chunks_json_path, "w") as f:
+            json.dump(nonsilent_chunks, f)
+
+    if not nonsilent_chunks:
+        if os.path.exists(temp_wav): os.remove(temp_wav)
+        return video_path
+
+    print(f"[🎬] Found {len(nonsilent_chunks)} active segments. Slicing video...")
+
+    filter_lines = []
+    concat_v = ""
+    concat_a = ""
+    
+    chopped_cuts = []
+    current_time = 0.0
+
+    for i, (start_ms, end_ms) in enumerate(nonsilent_chunks):
+        start_sec = max(0, (start_ms - 150) / 1000.0)
+        end_sec = (end_ms + 100) / 1000.0
+        dur = end_sec - start_sec
+        
+        current_time += dur
+        chopped_cuts.append(current_time)
+
+        v_filter = f"[0:v]trim=start={start_sec:.3f}:end={end_sec:.3f},setpts=PTS-STARTPTS,setsar=1[v{i}];"
+        a_filter = (
+            f"[0:a]atrim=start={start_sec:.3f}:end={end_sec:.3f},asetpts=PTS-STARTPTS,"
+            f"afade=t=in:st=0:d=0.04,afade=t=out:st={dur-0.04:.3f}:d=0.04[a{i}];"
+        )
+
+        filter_lines.append(v_filter)
+        filter_lines.append(a_filter)
+        concat_v += f"[v{i}][a{i}]"
+
+    with open(chopped_cuts_path, "w") as f:
+        json.dump(chopped_cuts, f)
+
+    filter_lines.append(f"{concat_v}concat=n={len(nonsilent_chunks)}:v=1:a=1[outv][outa]")
+
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(filter_lines))
+
+    subprocess.run([
+        "ffmpeg", "-i", video_path,
+        "-filter_complex_script", script_path,
+        "-map", "[outv]", "-map", "[outa]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k",
+        output_vid, "-y"
+    ], check=True, capture_output=True)
+
+    for f in [temp_wav, script_path]:
+        if os.path.exists(f): os.remove(f)
+
+    return output_vid
+
 
 # ─────────────────────────────────────────────
 # 3. PIPELINE ORCHESTRATION HELPERS
@@ -2385,19 +2466,15 @@ def stage_alternating_zoom(video_path: str, options: dict) -> str:
     print("[⚙️] Adding Alternating Camera Angles (Zoom) to Composited Backgrounds...")
     base_dir   = os.path.dirname(os.path.abspath(video_path))
     output_vid = os.path.splitext(video_path)[0] + "_cam_angles.mp4"
+    json_path  = os.path.join(base_dir, "_chopped_cuts.json")
     
     flash_times = []
-    timeline_scenes = options.get("timelineScenes", [])
-    
-    if len(timeline_scenes) > 1:
-        # The first scene is usually at 0.0, we want the subsequent splits
-        for scene in timeline_scenes[1:]:
-            t = float(scene.get("timestamp", 0.0))
-            if t > 0.0:
-                flash_times.append(t)
+    if os.path.exists(json_path):
+        with open(json_path, "r") as f:
+            flash_times = json.load(f)
                 
     if not flash_times:
-        print("[⚙️] No cuts detected in timeline. Skipping Alternating Zoom.")
+        print("[⚙️] No cuts detected from chopper. Skipping Alternating Zoom.")
         return video_path
         
     try:
@@ -2425,7 +2502,9 @@ def stage_alternating_zoom(video_path: str, options: dict) -> str:
         print(f"[❌] Failed to probe video for Zoom: {e}")
         return video_path
 
-    cut_points = [0.0] + list(flash_times) + [total_dur]
+    cut_points = [0.0] + list(flash_times)
+    if not cut_points or (total_dur - cut_points[-1]) > 0.1:
+        cut_points.append(total_dur)
     
     zoom_speed = 0.08 / fps
     filter_complex = f"[0:v]split={len(cut_points)-1}"
@@ -2591,8 +2670,8 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
                 canvas[:, W-offset_x:] = frame_b[:, :offset_x]
                 
             # Calculate directional horizontal motion blur
-            # Peaks at the center of the transition
-            blur_intensity = int(W * 0.15 * (1.0 - abs(t_norm - 0.5) * 2))
+            # Peaks at the center of the transition (Massive speedster blur)
+            blur_intensity = int(W * 0.45 * (1.0 - abs(t_norm - 0.5) * 2))
             if blur_intensity > 1:
                 # Ensure kernel size is odd for OpenCV
                 if blur_intensity % 2 == 0: blur_intensity += 1
@@ -4063,6 +4142,18 @@ def run_pipeline(video_path: str, options_json: str) -> None:
         print("Please re-select the file in the UI.")
         return
 
+    if options.get("chopAndLoadOnly"):
+        print("\n[🎬] CHOP AND LOAD (NO ZOOM)...")
+        result = stage_chop_and_load(video_path, options)
+        print(f"\n[🚀] PIPELINE COMPLETE. Final output: {result}")
+        return
+
+    if options.get("extractMp3Only"):
+        print("\n[🎵] EXTRACTING RAW AUDIO ONLY...")
+        result = stage_mp4_to_mp3(video_path, options)
+        print(f"\n[🚀] AUDIO EXTRACTION COMPLETE. Final output: {result}")
+        return
+
     if options.get("enhanceAiImage"):
         print("\n[🎬] RUNNING AI IMAGE ENHANCEMENT...")
         result = stage_enhance_ai_image(video_path)
@@ -4163,7 +4254,10 @@ Do not include any markdown formatting. Just the raw JSON array."""
         else:
             current_video = stage_burn_captions(current_video, options)
 
-    # PHASE 5: TRANSITIONS
+    # PHASE 5: POST-COMPOSITION EFFECTS
+    if options.get("jumpCutZooms"):
+        current_video = stage_alternating_zoom(current_video, options)
+
     if options.get("autoTransitions"):
         current_video = stage_scene_transitions(current_video, options)
 

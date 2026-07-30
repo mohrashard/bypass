@@ -20,6 +20,7 @@ const OPTIONS_META: Record<string, string> = {
   extractMp3: '🎵 Extract MP3 Audio',
   mergeEngine: '🔄 Audio Merger Engine',
   removeSilence: '✂️ Remove Dead Air',
+  jumpCutZooms: '🔍 Jump Cut Zooms (Requires Chop)',
   stabilizerEngine: '⚖️ Video Stabilizer Engine',
   hookEngine: '🎣 0-Second Hook Engine',
   burnCaptions: '📝 Burn Viral Captions',
@@ -116,6 +117,7 @@ export default function App() {
     maskBgImagePath: '',
     maskBgImageName: '',
     removeSilence: true,
+    jumpCutZooms: false,
     burnCaptions: false,
     studioAudio: false,
     blurBackground: false,
@@ -489,8 +491,10 @@ export default function App() {
         processType: 'pipeline',
         optionsJson: JSON.stringify({
           ...options,
-          removeSilence: true, // Only chop
+          removeSilence: false, 
+          chopAndLoadOnly: true, // Only chop
           mergeEngine: false,
+          jumpCutZooms: false,
           stabilizerEngine: false,
           blurBackground: false,
           burnCaptions: false,
@@ -526,7 +530,7 @@ export default function App() {
   const handleChopAndTranscribe = async () => {
     if (!selectedFilePath || isTranscribing || isProcessing) return;
     setIsTranscribing(true);
-    setTerminalLines([`⚙️ Chopping Dead Air & Booting Whisper AI...`]);
+    setTerminalLines([`⚙️ Booting Deepgram Nova-2 AI...`]);
     try {
       const out: string = await invoke('run_python_engine', {
         videoPath: selectedFilePath,
@@ -795,7 +799,13 @@ export default function App() {
                           onClick={handleChopAndTranscribe}
                           disabled={isTranscribing}
                           className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
-                          4. Transcribe (Temporary)
+                          4. Transcribe (Deepgram AI)
+                        </button>
+                        <button 
+                          onClick={handleExtractMp3}
+                          disabled={isProcessing}
+                          className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-bold py-2 px-4 rounded transition-colors border border-zinc-700 disabled:opacity-50">
+                          5. Extract Audio (For Zap Subs)
                         </button>
                       </div>
                     </div>
