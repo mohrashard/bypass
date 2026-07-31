@@ -4,6 +4,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import NexusTab from './NexusTab';
 import LeadEngineTab from './LeadEngineTab';
+import NexusAutomatorTab from './NexusAutomatorTab';
 
 const NOISE_PATTERNS = [
   /UserWarning/, /FutureWarning/, /DeprecationWarning/,
@@ -52,9 +53,8 @@ export interface SceneConfig {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'utility' | 'nexus' | 'lead'>('utility');
+  const [activeTab, setActiveTab] = useState<'utility' | 'nexus' | 'lead' | 'automator'>('utility');
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
-  const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPreviewVertical, setIsPreviewVertical] = useState(false);
   const [showSafeZone, setShowSafeZone] = useState(false);
@@ -189,7 +189,6 @@ export default function App() {
     if (match && match[1]) {
       const newPath = match[1].trim();
       setSelectedFilePath(newPath);
-      setSelectedFileName(newPath.split(/[\\//]/).pop() || '');
     }
   }, [terminalLines]);
 
@@ -204,7 +203,6 @@ export default function App() {
     }).catch(() => null);
     if (selected && typeof selected === 'string') {
       setSelectedFilePath(selected);
-      setSelectedFileName(selected.split(/[\\/]/).pop() ?? 'media');
       setTerminalLines([]);
     }
   };
@@ -661,10 +659,10 @@ export default function App() {
   const isBusy = isProcessing;
 
   return (
-    <main className="min-h-screen text-white font-sans flex flex-col bg-[#09090b]">
+    <main className="h-screen h-[100dvh] overflow-hidden text-white font-sans flex flex-col bg-[#09090b]">
 
       <nav className="border-b border-zinc-800 bg-zinc-950 px-4 py-3 flex justify-center gap-3">
-        {([['utility', '⚙️ Utility Pipe', 'emerald'], ['nexus', '🧠 Nexus Studio', 'purple'], ['lead', '🚀 Lead Engine', 'orange']] as const).map(
+        {([['utility', '⚙️ Utility Pipe', 'emerald'], ['nexus', '🧠 Nexus Studio', 'purple'], ['lead', '🚀 Lead Engine', 'orange'], ['automator', '🎬 Automator', 'pink']] as const).map(
           ([tab, label, color]) => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className={`px-6 py-2 rounded-lg font-medium text-sm transition-all ${activeTab === tab
@@ -672,7 +670,9 @@ export default function App() {
                   ? 'bg-emerald-600 text-white shadow-[0_0_12px_rgba(5,150,105,0.4)]'
                   : color === 'purple'
                   ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(147,51,234,0.4)]'
-                  : 'bg-orange-600 text-white shadow-[0_0_12px_rgba(234,88,12,0.4)]'
+                  : color === 'orange'
+                  ? 'bg-orange-600 text-white shadow-[0_0_12px_rgba(234,88,12,0.4)]'
+                  : 'bg-pink-600 text-white shadow-[0_0_12px_rgba(219,39,119,0.4)]'
                 : 'bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800'}`}>
               {label}
             </button>
@@ -2031,6 +2031,8 @@ export default function App() {
         <NexusTab />
       ) : activeTab === 'lead' ? (
         <LeadEngineTab />
+      ) : activeTab === 'automator' ? (
+        <NexusAutomatorTab />
       ) : null}
     </main>
   );

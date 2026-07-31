@@ -176,6 +176,69 @@ async fn run_nexus_engine(
     Ok(output_path)
 }
 
+#[tauri::command]
+async fn run_nexus_automator(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    options_json: String,
+) -> Result<String, String> {
+    use tauri_plugin_shell::ShellExt;
+    use tauri_plugin_shell::process::CommandEvent;
+    use tauri::Emitter;
+
+    let shell = app.shell();
+
+    #[cfg(debug_assertions)]
+    let command = {
+        let python_path = if cfg!(windows) {
+            "../ai_engine/venv/Scripts/python.exe"
+        } else {
+            "../ai_engine/venv/bin/python"
+        };
+        let script_name = "../ai_engine/nexus_automator.py".to_string();
+        shell.command(python_path).args([script_name, options_json])
+    };
+
+    #[cfg(not(debug_assertions))]
+    let command = {
+        shell.sidecar("nexus_automator")
+            .map_err(|e| e.to_string())?
+            .args([options_json])
+    };
+
+    let (mut rx, child) = command.spawn().map_err(|e| e.to_string())?;
+
+    *state.process.lock().unwrap() = Some(child);
+
+    let mut full_output = String::new();
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(line) => {
+                let out = String::from_utf8_lossy(&line).to_string();
+                full_output.push_str(&out);
+                let _ = app.emit("automator-stdout", out);
+            }
+            CommandEvent::Stderr(line) => {
+                let out = String::from_utf8_lossy(&line).to_string();
+                full_output.push_str(&out);
+                let _ = app.emit("automator-stdout", out);
+            }
+            CommandEvent::Terminated(payload) => {
+                *state.process.lock().unwrap() = None;
+                if payload.code == Some(0) {
+                    return Ok(full_output);
+                } else {
+                    return Err(format!("Process exited with code {:?}\n\nLog: {}", payload.code, full_output));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(full_output)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -185,7 +248,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, run_python_engine, run_nexus_engine, stop_engine])
+        .invoke_handler(tauri::generate_handler![greet, run_python_engine, run_nexus_engine, run_nexus_automator, stop_engine])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

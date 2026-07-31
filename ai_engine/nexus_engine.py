@@ -129,6 +129,7 @@ async def render_html_to_mp4(
     height: int = 1080,
     bg_color: str = "#000000",
     audio_path: str = None,
+    transparent: bool = False,
 ) -> str:
     from playwright.async_api import async_playwright
 
@@ -197,6 +198,14 @@ async def render_html_to_mp4(
     // Using _realSetTimeout (saved before override) so it actually fires.
     // DOMContentLoaded is reliable even when CDN scripts are loading/failing.
     document.addEventListener('DOMContentLoaded', function() {{
+        // Global volume reduction for all headless renders
+        if (window.Tone && window.Tone.Destination) {{
+            window.Tone.Destination.volume.value = -15;
+        }}
+        document.querySelectorAll('audio, video').forEach(function(media) {{
+            media.volume = 0.15;
+        }});
+
         // Fire rAF tick 0 so GSAP/anime.js initialize their internals
         window.__nexusSeek(0);
         // Use the REAL setTimeout (not our overridden one) to wait 200ms
@@ -302,7 +311,7 @@ async def render_html_to_mp4(
         ffmpeg_cmd = [
             "ffmpeg", "-y",
             "-f", "image2pipe",
-            "-vcodec", "mjpeg",
+            "-vcodec", "png" if transparent else "mjpeg",
             "-framerate", str(fps),
             "-thread_queue_size", "512",
             "-i", "pipe:0"
@@ -311,12 +320,19 @@ async def render_html_to_mp4(
         if audio_path and os.path.exists(audio_path):
             ffmpeg_cmd.extend(["-i", audio_path])
             
-        ffmpeg_cmd.extend([
-            "-c:v", "h264_nvenc",
-            "-preset", "p4",
-            "-cq", "18",
-            "-pix_fmt", "yuv420p"
-        ])
+        if transparent:
+            # Lossless Apple Animation codec (supports alpha perfectly, very fast)
+            ffmpeg_cmd.extend([
+                "-c:v", "qtrle",
+                "-pix_fmt", "argb"
+            ])
+        else:
+            ffmpeg_cmd.extend([
+                "-c:v", "h264_nvenc",
+                "-preset", "p4",
+                "-cq", "18",
+                "-pix_fmt", "yuv420p"
+            ])
         
         if audio_path and os.path.exists(audio_path):
             ffmpeg_cmd.extend([
@@ -350,11 +366,17 @@ async def render_html_to_mp4(
             await page.evaluate(f"window.__nexusSeek({time_ms:.4f})")
 
             try:
-                # Fast CDP screenshot (quality 100 for maximum fidelity)
-                res = await client.send("Page.captureScreenshot", {
-                    "format": "jpeg",
-                    "quality": 100
-                })
+                # Fast CDP screenshot
+                if transparent:
+                    res = await client.send("Page.captureScreenshot", {
+                        "format": "png",
+                        "omitBackground": True
+                    })
+                else:
+                    res = await client.send("Page.captureScreenshot", {
+                        "format": "jpeg",
+                        "quality": 100
+                    })
                 jpeg_bytes = base64.b64decode(res["data"])
                 
                 ffmpeg_proc.stdin.write(jpeg_bytes)
@@ -391,7 +413,8 @@ async def render_html_to_mp4(
                     a_tmp.write(audio_bytes)
                     a_tmp_path = a_tmp.name
                 
-                final_tmp = output_path + ".tmp.mp4"
+                _, ext = os.path.splitext(output_path)
+                final_tmp = output_path + f".tmp{ext}"
                 mux_cmd = [
                     "ffmpeg", "-y",
                     "-i", output_path,
@@ -431,6 +454,7 @@ def main():
     height      = int(options.get("height", 1080))
     bg_color    = options.get("bgColor", "#000000")
     audio_path  = options.get("audioPath", None)
+    transparent = options.get("transparent", False)
 
     if not html_source:
         print("[❌] No HTML provided.")
@@ -445,6 +469,7 @@ def main():
         height=height,
         bg_color=bg_color,
         audio_path=audio_path,
+        transparent=transparent,
     ))
 
 
