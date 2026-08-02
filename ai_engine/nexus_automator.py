@@ -4,8 +4,10 @@ import os
 import io
 
 # Fix Windows console UTF-8 encoding issues for emojis
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", line_buffering=True)
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
+if sys.stderr.encoding.lower() != 'utf-8':
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", line_buffering=True)
 
 def generate_code(options):
     from dotenv import load_dotenv
@@ -242,7 +244,28 @@ def render_pipeline(options):
     print(f"[⚙️] Running final FFmpeg merge...")
     try:
         subprocess.run(ffmpeg_cmd, check=True)
-        print(f"\n[✅] Batch Render Complete: {final_output}")
+        print(f"\n[✅] Basic Batch Render Complete: {final_output}")
+        
+        # Step 3: Apply cinematic transitions if requested
+        transitions = options.get("transitions", [])
+        if transitions:
+            try:
+                print(f"[⚙️] Executing Cinematic 'Flash' Transitions...")
+                from pipeline import stage_scene_transitions
+                
+                # Format transition times to match what pipeline.py expects: [{"timestamp": t}]
+                # Note: stage_scene_transitions skips the 0.0 timestamp cut, so we prepend a dummy 0.0
+                timelineScenes = [{"timestamp": 0.0}] + [{"timestamp": float(t)} for t in transitions]
+                
+                transition_options = {"timelineScenes": timelineScenes}
+                
+                # Apply the transitions directly onto the final output video
+                final_output = stage_scene_transitions(final_output, transition_options)
+                
+            except Exception as e:
+                print(f"[❌] Error applying cinematic transitions: {e}")
+                
+        print(f"\n[🚀] Final Video Available At: {final_output}")
     except subprocess.CalledProcessError as e:
         print(f"\n[❌] FFmpeg merge failed with error code {e.returncode}")
         sys.exit(1)

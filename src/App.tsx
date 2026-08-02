@@ -165,6 +165,7 @@ export default function App() {
     subjectY: 0,
     keyingMode: 'chroma',
     colorGradeStyle: 'pro-max',
+    outputRatio: '9:16',
   });
 
   useEffect(() => {
@@ -942,7 +943,21 @@ export default function App() {
                       className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-purple-500"
                     >
                       <option value="chroma">FFmpeg Chroma Key (Best for Green Screen)</option>
+                      <option value="chroma-dark">FFmpeg Chroma Key (Dark Green Screen)</option>
                       <option value="ai">MediaPipe AI (No Green Screen needed)</option>
+                    </select>
+                  </div>
+                  
+                  <div className="flex justify-between items-center bg-zinc-900 border border-zinc-800 p-2 rounded-lg mt-2">
+                    <span className="text-xs text-zinc-400 font-bold ml-2">OUTPUT ASPECT RATIO</span>
+                    <select
+                      value={options.outputRatio}
+                      onChange={(e) => setOptions(prev => ({...prev, outputRatio: e.target.value}))}
+                      className="bg-zinc-950 border border-zinc-700 text-zinc-300 text-xs rounded p-1 outline-none focus:border-purple-500"
+                    >
+                      <option value="9:16">9:16 (Vertical / TikTok)</option>
+                      <option value="16:9">16:9 (Horizontal / YouTube)</option>
+                      <option value="source">Match Source</option>
                     </select>
                   </div>
                   
@@ -1158,6 +1173,7 @@ export default function App() {
                             className="bg-purple-950/30 border border-purple-900/50 text-purple-300 text-xs rounded p-1 outline-none focus:border-purple-500 font-medium">
                             <option value="ai">🧠 AI Auto-Detect</option>
                             <option value="chroma">🟩 FFmpeg Hard Key</option>
+                            <option value="chroma-dark">🟩 FFmpeg Hard Key (Dark)</option>
                             <option value="webgl">🌐 WebGL Soft Key (GPU)</option>
                           </select>
                         </div>

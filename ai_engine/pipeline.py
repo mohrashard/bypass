@@ -30,7 +30,8 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 os.environ["GLOG_minloglevel"] = "3"
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 
 
 import os
@@ -2350,6 +2351,7 @@ def stage_background_fx(video_path: str, bg_options: dict) -> str:
     return output_vid
 
 
+
 # ─────────────────────────────────────────────
 # 12. SEMANTIC SMART-ZOOM ENGINE
 # ─────────────────────────────────────────────
@@ -2615,11 +2617,11 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
     TRANS_FRAMES = max(6, int(TRANS_SECS * FPS))
     HALF_TRANS = TRANS_FRAMES // 2
 
-    # ── 2. Extract JPEG Sequence (Ultra-Fast) ───────────────────────────────
-    print("[⚙️] Extracting frame sequence for zero-drift sync...")
+    # ── 2. Extract JPEG Sequence (Ultra-Fast Hardware Accelerated) ───────────────────────────────
+    print("[⚙️] Extracting frame sequence for zero-drift sync (Hardware Accelerated)...")
     os.makedirs(frames_dir, exist_ok=True)
     subprocess.run([
-        "ffmpeg", "-y", "-i", video_path,
+        "ffmpeg", "-y", "-hwaccel", "cuda", "-i", video_path,
         "-qscale:v", "2",
         os.path.join(frames_dir, "%06d.jpg")
     ], check=True, capture_output=True)
@@ -2702,7 +2704,8 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
         audio_mix_inputs = "[1:a:0]"
         for idx, t_start in enumerate(flash_times):
             aud_out   = f"[sfx_{idx}]"
-            delay_ms  = int(max(0, t_start) * 1000)
+            # Offset SFX earlier by 250ms so the whoosh buildup hits exactly as the slide happens
+            delay_ms  = int(max(0, t_start - 0.25) * 1000)
             filter_complex_a += f"[2:a]adelay={delay_ms}|{delay_ms}{aud_out};"
             audio_mix_inputs += aud_out
         total_inputs = len(flash_times) + 1
@@ -2718,14 +2721,14 @@ def stage_scene_transitions(video_path: str, options: dict) -> str:
         cmd.extend([
             "-filter_complex", filter_complex_a, 
             "-map", "0:v:0", "-map", audio_map, 
-            "-c:v", "libx264", "-preset", "fast", "-crf", "18", 
+            "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18", 
             "-c:a", "aac", "-b:a", "192k", 
             "-shortest", output_vid
         ])
     else:
         cmd.extend([
             "-map", "0:v:0", "-map", audio_map, 
-            "-c:v", "libx264", "-preset", "fast", "-crf", "18", 
+            "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "18", 
             "-c:a", "copy", 
             "-shortest", output_vid
         ])

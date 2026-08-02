@@ -68,6 +68,7 @@ export default function NexusAutomatorTab() {
   const [iframeUrl, setIframeUrl] = useState<string>('');
   const [autoRefresh] = useState(true);
   const [editorFontSize, setEditorFontSize] = useState(13);
+  const [transitions, setTransitions] = useState<number[]>([]);
   
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
   const [isRendering, setIsRendering] = useState(false);
@@ -444,7 +445,8 @@ export default function NexusAutomatorTab() {
     const optionsJson = JSON.stringify({
       action: "render",
       videoPath: videoPath,
-      segments: validSegments
+      segments: validSegments,
+      transitions: transitions
     });
     
     try {
@@ -666,21 +668,46 @@ export default function NexusAutomatorTab() {
              <span className="text-xs text-zinc-500 font-mono w-12 text-right">
                {videoCurrentTime.toFixed(1)}s
              </span>
-             <input 
-                type="range"
-                min="0"
-                max={videoDuration}
-                step="0.01"
-                value={videoCurrentTime}
-                onChange={(e) => {
-                  const val = parseFloat(e.target.value);
-                  if (videoRef.current) {
-                    videoRef.current.currentTime = val;
-                  }
-                  setVideoCurrentTime(val);
-                }}
-                className="flex-1 accent-pink-500 cursor-pointer h-1.5 bg-zinc-800 appearance-none rounded-full outline-none hover:bg-zinc-700 transition-colors"
-             />
+             
+             <button 
+               onClick={() => {
+                 if (videoCurrentTime > 0 && !transitions.includes(videoCurrentTime)) {
+                   setTransitions(prev => [...prev, videoCurrentTime].sort((a,b)=>a-b));
+                 }
+               }}
+               className="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 rounded-sm font-bold uppercase transition-colors shadow-[0_0_8px_rgba(79,70,229,0.3)]"
+               title="Add Whip-Pan Transition at Playhead"
+             >
+               ⚡ Transition
+             </button>
+
+             <div className="flex-1 relative flex items-center h-4">
+               <input 
+                  type="range"
+                  min="0"
+                  max={videoDuration}
+                  step="0.01"
+                  value={videoCurrentTime}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    if (videoRef.current) {
+                      videoRef.current.currentTime = val;
+                    }
+                    setVideoCurrentTime(val);
+                  }}
+                  className="w-full accent-pink-500 cursor-pointer h-1.5 bg-zinc-800 appearance-none rounded-full outline-none hover:bg-zinc-700 transition-colors z-10 relative"
+               />
+               {/* Visual Markers for Transitions */}
+               {videoDuration > 0 && transitions.map(t => (
+                 <div 
+                   key={t}
+                   onClick={() => setTransitions(prev => prev.filter(x => x !== t))}
+                   className="absolute w-1.5 h-3 bg-indigo-400 z-20 cursor-pointer hover:bg-indigo-300 hover:scale-125 transition-transform rounded-[1px]"
+                   style={{ left: `calc(${(t / videoDuration) * 100}% - 3px)` }}
+                   title={`Remove Transition at ${t.toFixed(2)}s`}
+                 />
+               ))}
+             </div>
              <span className="text-xs text-zinc-500 font-mono w-12">
                {videoDuration.toFixed(1)}s
              </span>

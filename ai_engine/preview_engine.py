@@ -38,10 +38,14 @@ def generate_preview(video_path: str, options_json: str):
         os.remove(preview_img)
         log("Deleted old preview image.")
     
+    print(f"[PREVIEW_DBG] keying={keying_mode} mode={mode} bg_img={bg_image_path}")
     log(f"Keying Mode: {keying_mode}, BG Mode: {mode}, BG Path: {bg_image_path}")
     
-    if keying_mode == "chroma":
-        chroma_filter = "chromakey=0x1A9535:0.11:0.02,despill=green"
+    if keying_mode in ("chroma", "chroma-dark"):
+        if keying_mode == "chroma-dark":
+            chroma_filter = "chromakey=0x18742B:0.09:0.08,despill=green"
+        else:
+            chroma_filter = "chromakey=0x1A9535:0.11:0.02,despill=green"
         sub_w = int(w * sub_scale / 100)
         sub_h = int(h * sub_scale / 100)
         sub_w = sub_w if sub_w % 2 == 0 else sub_w + 1
@@ -52,7 +56,9 @@ def generate_preview(video_path: str, options_json: str):
         overlay_cmd = f"overlay=(W-w)/2:H-h{y_offset}:shortest=1,format=yuv420p"
 
         if mode == "blur":
-            filter_complex = f"[0:v]boxblur=25:25,colorchannelmixer=rr=0.7:gg=0.7:bb=0.7[bg];{fg_filter};[bg][fg_scaled]{overlay_cmd}[outv]"
+            # split [0:v] into two streams: one for blurred bg, one for fg chroma key
+            fg_filter_blur = f"[src1]{chroma_filter}[fg];[fg]scale={sub_w}:{sub_h}[fg_scaled]"
+            filter_complex = f"[0:v]split=2[src0][src1];[src0]boxblur=25:25,colorchannelmixer=rr=0.7:gg=0.7:bb=0.7[bg];{fg_filter_blur};[bg][fg_scaled]{overlay_cmd}[outv]"
             inputs = ["-i", video_path]
         elif mode == "image" and bg_image_path and os.path.exists(bg_image_path):
             bg_w = int(w * (bg_scale / 100.0))
