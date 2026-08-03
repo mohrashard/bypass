@@ -117,6 +117,10 @@ export default function App() {
     maskBgImagePath: '',
     maskBgImageName: '',
     removeSilence: true,
+    protectStartHook: false,
+    protectStartSeconds: 2.0,
+    protectEndHook: false,
+    protectEndSeconds: 2.0,
     jumpCutZooms: false,
     burnCaptions: false,
     studioAudio: false,
@@ -795,6 +799,34 @@ export default function App() {
                           className="w-full mb-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-4 rounded transition-colors disabled:opacity-50">
                           3. Chop & Load Video
                         </button>
+
+                        <div className="w-full mb-2 bg-zinc-950/50 rounded-lg p-2 flex flex-col gap-2 border border-zinc-800">
+                          <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider text-left">✂️ Chopper Protection</span>
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs text-zinc-300">
+                              <input type="checkbox" checked={options.protectStartHook} onChange={() => setOptions(o => ({...o, protectStartHook: !o.protectStartHook}))} className="accent-emerald-500" />
+                              Start Hook
+                            </label>
+                            {options.protectStartHook && (
+                              <div className="flex items-center gap-1">
+                                <input type="number" step="0.1" min="0" max="10" value={options.protectStartSeconds} onChange={(e) => setOptions(o => ({...o, protectStartSeconds: parseFloat(e.target.value) || 0}))} className="w-12 bg-zinc-800 text-white text-[10px] px-1 py-0.5 rounded outline-none border border-zinc-700" />
+                                <span className="text-[10px] text-zinc-500">sec</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs text-zinc-300">
+                              <input type="checkbox" checked={options.protectEndHook} onChange={() => setOptions(o => ({...o, protectEndHook: !o.protectEndHook}))} className="accent-emerald-500" />
+                              End Hook
+                            </label>
+                            {options.protectEndHook && (
+                              <div className="flex items-center gap-1">
+                                <input type="number" step="0.1" min="0" max="10" value={options.protectEndSeconds} onChange={(e) => setOptions(o => ({...o, protectEndSeconds: parseFloat(e.target.value) || 0}))} className="w-12 bg-zinc-800 text-white text-[10px] px-1 py-0.5 rounded outline-none border border-zinc-700" />
+                                <span className="text-[10px] text-zinc-500">sec</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
 
                         <button 
                           onClick={handleChopAndTranscribe}

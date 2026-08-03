@@ -145,14 +145,23 @@ def render_pipeline(options):
             "transparent": True
         }
         
+        opt_fd, opt_path = tempfile.mkstemp(suffix=".json", prefix="engine_opt_")
+        with os.fdopen(opt_fd, 'w', encoding='utf-8') as f:
+            json.dump(engine_options, f)
+            
         cmd = [
             python_exe,
             nexus_engine_script,
-            json.dumps(engine_options),
+            opt_path,
             out_mov
         ]
         
         result = subprocess.run(cmd)
+        
+        try:
+            os.unlink(opt_path)
+        except:
+            pass
         if result.returncode == 0 and os.path.exists(out_mov):
             segment_videos.append({
                 "path": out_mov,
@@ -276,6 +285,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     options_json_arg = sys.argv[1]
+    
+    if options_json_arg.endswith('.json') and os.path.exists(options_json_arg):
+        with open(options_json_arg, 'r', encoding='utf-8') as f:
+            options_json_arg = f.read()
     
     try:
         options = json.loads(options_json_arg)

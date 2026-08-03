@@ -444,7 +444,14 @@ def main():
         print("Usage: nexus_engine.py <options_json> <output_path>")
         sys.exit(1)
 
-    options = json.loads(sys.argv[1])
+    options_arg = sys.argv[1]
+    output_path = sys.argv[2]
+    
+    if options_arg.endswith('.json') and os.path.exists(options_arg):
+        with open(options_arg, 'r', encoding='utf-8') as f:
+            options_arg = f.read()
+
+    options = json.loads(options_arg)
     output_path = sys.argv[2]
 
     html_source = options.get("html", "")

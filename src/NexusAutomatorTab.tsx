@@ -8,6 +8,7 @@ interface Segment {
   end: number;
   phrase: string;
   htmlCode?: string;
+  isSinhala?: boolean;
 }
 
 const DEFAULT_HTML = `<!DOCTYPE html>
@@ -23,6 +24,46 @@ const DEFAULT_HTML = `<!DOCTYPE html>
     align-items: center;
     justify-content: center;
     font-family: 'Segoe UI', sans-serif;
+    overflow: hidden;
+  }
+  .card {
+    background: rgba(0,0,0,0.8);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 2vw 4vw;
+    color: white;
+    font-size: 4vw;
+    font-weight: bold;
+    text-align: center;
+    animation: pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  }
+  @keyframes pop {
+    0% { transform: scale(0.8); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div id="text">ANIMATION TEXT</div>
+  </div>
+</body>
+</html>`;
+
+const SINHALA_HTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Gemunu+Libre:wght@700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 100vw; height: 100vh;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Gemunu Libre', 'Segoe UI', sans-serif;
     overflow: hidden;
   }
   .card {
@@ -228,6 +269,38 @@ export default function NexusAutomatorTab() {
     }
   };
 
+  const handlePasteSinhala = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) {
+        alert("Clipboard is empty.");
+        return;
+      }
+
+      try {
+        const data = JSON.parse(text);
+        const parsedSegments = Array.isArray(data) ? data : data.segments || [];
+        if (parsedSegments.length > 0) {
+          setHistory(prev => [...prev, segments]); // Save to history
+          setSegments(parsedSegments.map((s: any) => ({
+            start: s.start,
+            end: s.end,
+            phrase: (s.phrase || s.text || s.word || "").replace(/<[^>]+>/g, '').trim(),
+            htmlCode: '',
+            isSinhala: true
+          })));
+          setSelectedIndices([]);
+          setActiveSegmentIdx(null);
+          return;
+        }
+      } catch (e) {
+        alert("Could not parse clipboard data as JSON. Please ensure you are copying a valid JSON array of segments.");
+      }
+    } catch (err) {
+      alert("Failed to read clipboard. You may need to grant clipboard permissions, or paste manually: " + err);
+    }
+  };
+
   // ── Video & Timeline Sync ─────────────────────────────────────────────────
   const handleSelectSegment = (idx: number) => {
     setActiveSegmentIdx(idx);
@@ -240,7 +313,9 @@ export default function NexusAutomatorTab() {
     }
     
     // Load code into editor
-    const code = seg.htmlCode || DEFAULT_HTML.replace('ANIMATION TEXT', seg.phrase.toUpperCase());
+    const defaultTemplate = seg.isSinhala ? SINHALA_HTML : DEFAULT_HTML;
+    const displayPhrase = seg.isSinhala ? seg.phrase : seg.phrase.toUpperCase();
+    const code = seg.htmlCode || defaultTemplate.replace('ANIMATION TEXT', displayPhrase);
     setEditorHtml(code);
     setPreviewHtml(code);
   };
@@ -480,6 +555,9 @@ export default function NexusAutomatorTab() {
         </button>
         <button onClick={handlePasteData} className="text-xs px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition-colors flex items-center gap-2" title="Paste SRT or JSON from Clipboard">
           <span>📋 Paste</span>
+        </button>
+        <button onClick={handlePasteSinhala} className="text-xs px-3 py-1.5 rounded bg-pink-900/50 hover:bg-pink-800/60 text-pink-300 border border-pink-800/50 transition-colors flex items-center gap-2" title="Paste Sinhala JSON from Clipboard">
+          <span>🇱🇰 Paste Sinhala</span>
         </button>
 
         <div className="flex-1" />

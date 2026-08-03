@@ -122,6 +122,11 @@ async fn run_nexus_engine(
 
     let merged_options = options.to_string();
 
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    let temp_path = std::env::temp_dir().join(format!("nexus_engine_{}.json", now));
+    std::fs::write(&temp_path, &merged_options).map_err(|e| e.to_string())?;
+    let options_arg = temp_path.to_string_lossy().to_string();
+
     #[cfg(debug_assertions)]
     let command = {
         let python_path = if cfg!(windows) {
@@ -130,14 +135,14 @@ async fn run_nexus_engine(
             "../ai_engine/venv/bin/python"
         };
         let script_name = "../ai_engine/nexus_engine.py".to_string();
-        shell.command(python_path).args([script_name, merged_options.clone(), output_path.clone()])
+        shell.command(python_path).args([script_name, options_arg.clone(), output_path.clone()])
     };
 
     #[cfg(not(debug_assertions))]
     let command = {
         shell.sidecar("nexus_engine")
             .map_err(|e| e.to_string())?
-            .args([&merged_options, &output_path])
+            .args([&options_arg, &output_path])
     };
 
     let (mut rx, child) = command.spawn().map_err(|e| e.to_string())?;
@@ -188,6 +193,11 @@ async fn run_nexus_automator(
 
     let shell = app.shell();
 
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    let temp_path = std::env::temp_dir().join(format!("nexus_automator_{}.json", now));
+    std::fs::write(&temp_path, &options_json).map_err(|e| e.to_string())?;
+    let options_arg = temp_path.to_string_lossy().to_string();
+
     #[cfg(debug_assertions)]
     let command = {
         let python_path = if cfg!(windows) {
@@ -196,14 +206,14 @@ async fn run_nexus_automator(
             "../ai_engine/venv/bin/python"
         };
         let script_name = "../ai_engine/nexus_automator.py".to_string();
-        shell.command(python_path).args([script_name, options_json])
+        shell.command(python_path).args([script_name, options_arg.clone()])
     };
 
     #[cfg(not(debug_assertions))]
     let command = {
         shell.sidecar("nexus_automator")
             .map_err(|e| e.to_string())?
-            .args([options_json])
+            .args([options_arg])
     };
 
     let (mut rx, child) = command.spawn().map_err(|e| e.to_string())?;

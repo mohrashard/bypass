@@ -152,6 +152,37 @@ def stage_remove_silence(video_path: str, options: dict = None) -> str:
         with open(chunks_json_path, "w") as f:
             json.dump(nonsilent_chunks, f)
 
+    # Hook Protection
+    protect_start = options.get("protectStartHook", False) if options else False
+    protect_start_sec = float(options.get("protectStartSeconds", 2.0)) if options else 2.0
+    protect_end = options.get("protectEndHook", False) if options else False
+    protect_end_sec = float(options.get("protectEndSeconds", 2.0)) if options else 2.0
+    
+    if (protect_start or protect_end) and nonsilent_chunks:
+        total_audio_ms = len(audio)
+        protected_chunks = []
+        if protect_start and protect_start_sec > 0:
+            protected_chunks.append([0, int(protect_start_sec * 1000)])
+            
+        protected_chunks.extend(nonsilent_chunks)
+        
+        if protect_end and protect_end_sec > 0:
+            end_start_ms = max(0, total_audio_ms - int(protect_end_sec * 1000))
+            protected_chunks.append([end_start_ms, total_audio_ms])
+            
+        protected_chunks.sort(key=lambda x: x[0])
+        merged = []
+        for chunk in protected_chunks:
+            if not merged:
+                merged.append(list(chunk))
+            else:
+                last_chunk = merged[-1]
+                if chunk[0] <= last_chunk[1]:
+                    last_chunk[1] = max(last_chunk[1], chunk[1])
+                else:
+                    merged.append(list(chunk))
+        nonsilent_chunks = merged
+
     if not nonsilent_chunks:
         if os.path.exists(temp_wav): os.remove(temp_wav)
         return video_path
@@ -180,7 +211,7 @@ def stage_remove_silence(video_path: str, options: dict = None) -> str:
 
     for i, (start_ms, end_ms) in enumerate(nonsilent_chunks):
         start_sec = max(0, (start_ms - 150) / 1000.0)
-        end_sec = (end_ms + 100) / 1000.0
+        end_sec = (end_ms + 350) / 1000.0
         dur = end_sec - start_sec
 
         v_base = f"[0:v]trim=start={start_sec:.3f}:end={end_sec:.3f},setpts=PTS-STARTPTS"
@@ -250,6 +281,37 @@ def stage_chop_and_load(video_path: str, options: dict = None) -> str:
         with open(chunks_json_path, "w") as f:
             json.dump(nonsilent_chunks, f)
 
+    # Hook Protection
+    protect_start = options.get("protectStartHook", False) if options else False
+    protect_start_sec = float(options.get("protectStartSeconds", 2.0)) if options else 2.0
+    protect_end = options.get("protectEndHook", False) if options else False
+    protect_end_sec = float(options.get("protectEndSeconds", 2.0)) if options else 2.0
+    
+    if (protect_start or protect_end) and nonsilent_chunks:
+        total_audio_ms = len(audio)
+        protected_chunks = []
+        if protect_start and protect_start_sec > 0:
+            protected_chunks.append([0, int(protect_start_sec * 1000)])
+            
+        protected_chunks.extend(nonsilent_chunks)
+        
+        if protect_end and protect_end_sec > 0:
+            end_start_ms = max(0, total_audio_ms - int(protect_end_sec * 1000))
+            protected_chunks.append([end_start_ms, total_audio_ms])
+            
+        protected_chunks.sort(key=lambda x: x[0])
+        merged = []
+        for chunk in protected_chunks:
+            if not merged:
+                merged.append(list(chunk))
+            else:
+                last_chunk = merged[-1]
+                if chunk[0] <= last_chunk[1]:
+                    last_chunk[1] = max(last_chunk[1], chunk[1])
+                else:
+                    merged.append(list(chunk))
+        nonsilent_chunks = merged
+
     if not nonsilent_chunks:
         if os.path.exists(temp_wav): os.remove(temp_wav)
         return video_path
@@ -265,7 +327,7 @@ def stage_chop_and_load(video_path: str, options: dict = None) -> str:
 
     for i, (start_ms, end_ms) in enumerate(nonsilent_chunks):
         start_sec = max(0, (start_ms - 150) / 1000.0)
-        end_sec = (end_ms + 100) / 1000.0
+        end_sec = (end_ms + 350) / 1000.0
         dur = end_sec - start_sec
         
         current_time += dur
@@ -2828,34 +2890,50 @@ def stage_merge_audio(video_path: str, options: dict) -> str:
     print(f"[⚙️] Booting Audio Merger Engine... Merging {os.path.basename(audio_path)}")
     
     base_dir = os.path.dirname(os.path.abspath(video_path))
-    output_vid = os.path.splitext(video_path)[0] + "_merged.mp4"
+    import time
+    output_vid = os.path.splitext(video_path)[0] + f"_merged_{int(time.time())}.mp4"
     
-    # We re-encode the video (using hardware acceleration if possible) to completely rebuild the PTS 
-    # starting from zero. This prevents massive desyncs when later applying caption overlays.
+    # We re-encode the video to completely rebuild the PTS starting from zero. 
+    # This prevents massive desyncs when later applying caption overlays.
     try:
         import subprocess
         subprocess.run(["ffmpeg", "-f", "lavfi", "-i", "nullsrc", "-c:v", "h264_nvenc", "-t", "1", "-f", "null", "-"], check=True, capture_output=True)
         cvcodec = "h264_nvenc"
         preset = "p6"
-        cq_args = ["-cq", "18"]
+        cq_args = ["-cq", "18", "-pix_fmt", "yuv420p"]
     except:
         cvcodec = "libx264"
         preset = "superfast"
-        cq_args = ["-crf", "18"]
+        cq_args = ["-crf", "18", "-pix_fmt", "yuv420p"]
+
+    # Determine exact video duration to avoid black screens caused by ffmpeg's buggy -shortest flag
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True
+        )
+        vid_dur_str = probe.stdout.strip()
+        if not vid_dur_str or vid_dur_str.lower() == "n/a":
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+                capture_output=True, text=True
+            )
+            vid_dur_str = probe.stdout.strip()
+        vid_dur = float(vid_dur_str)
+        dur_arg = ["-t", str(vid_dur)]
+    except Exception:
+        dur_arg = ["-shortest"]
 
     cmd = [
-        "ffmpeg", "-hwaccel", "auto", "-y", "-i", video_path, "-i", audio_path,
+        "ffmpeg", "-y", "-i", video_path, "-i", audio_path,
         "-map", "0:v:0", "-map", "1:a:0",
         "-c:v", cvcodec, "-preset", preset
     ] + cq_args + [
         "-c:a", "aac", "-b:a", "256k",
-        "-filter:a", "volume=4dB",
-        "-shortest",
-        output_vid
-    ]
+        "-filter:a", "volume=4dB"
+    ] + dur_arg + [output_vid]
     
     try:
-        import subprocess
         subprocess.run(cmd, check=True, capture_output=True)
         print(f"[✅] Audio merged successfully: {output_vid}")
         return output_vid
@@ -3431,17 +3509,20 @@ def stage_visual_hook(video_path: str, options: dict) -> str:
         page.screenshot(path=png_path, omit_background=True)
         browser.close()
         
-    print("[⚙️] Compositing Snap-Zoom Pattern Interrupt with FFmpeg...")
+    start_offset = float(options.get("protectStartSeconds", 0.0)) if options.get("protectStartHook") else 0.0
+    end_time = start_offset + hook_dur
+    
+    print(f"[⚙️] Compositing Snap-Zoom Pattern Interrupt with FFmpeg (Offset: {start_offset}s)...")
     
     # Fast punchy camera flash at start, plus glitchy shake for 0.15s
     # (Flash removed so it doesn't overwrite the Visual SFX Hook underneath)
-    shake_x = "if(lte(t,0.15), (random(1)-0.5)*15, 0)"
-    shake_y = "if(lte(t,0.15), (random(1)-0.5)*15, 0)"
+    shake_x = f"if(lte(t,{start_offset + 0.15}), (random(1)-0.5)*15, 0)"
+    shake_y = f"if(lte(t,{start_offset + 0.15}), (random(1)-0.5)*15, 0)"
     
     cmd = [
         "ffmpeg", "-hwaccel", "auto", "-i", video_path, "-i", png_path,
         "-filter_complex",
-        f"[0:v][1:v]overlay=x='{shake_x}':y='{shake_y}':enable='between(t,0,{hook_dur})'[outv]",
+        f"[0:v][1:v]overlay=x='{shake_x}':y='{shake_y}':enable='between(t,{start_offset},{end_time})'[outv]",
         "-map", "[outv]", "-map", "0:a?",
         "-c:v", "libx264", "-preset", "fast", "-crf", "17",
         "-c:a", "copy",
@@ -4128,86 +4209,7 @@ def stage_fast_stabilize(video_path: str, options: dict) -> str:
         # If it fails, return the original video path so the pipeline doesn't break
         return video_path
 
-def stage_enhance_ai_image(input_image_path: str) -> str:
-    from playwright.sync_api import sync_playwright
-    from PIL import Image
-    import os
-    print(f"[⚙️] Bypassing Invisible AI Watermarks via High-Res Screenshot: {input_image_path}")
-    base, ext = os.path.splitext(input_image_path)
-    output_image_path = f"{base}_hq.jpg"
 
-    try:
-        # 1. Get original image dimensions
-        img = Image.open(input_image_path)
-        w, h = img.size
-        img.close()
-
-        # 2. Automate a headless browser to "screenshot" the image.
-        # The browser's compositing and upscaling completely destroys 
-        # fragile steganographic watermarks (like SynthID).
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--disable-web-security", "--allow-file-access-from-files"]
-            )
-            
-            # device_scale_factor=2 upscales the screenshot by 2x for high quality
-            context = browser.new_context(
-                viewport={"width": w, "height": h},
-                device_scale_factor=2 
-            )
-            page = context.new_page()
-            
-            # We slightly overscale (101%) to force sub-pixel resampling.
-            # This guarantees the invisible pixel noise patterns are irreversibly scrambled.
-            html_content = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-                    body, html {{ width: {w}px; height: {h}px; overflow: hidden; background: #000; }}
-                    img {{ 
-                        width: 101%; 
-                        height: 101%; 
-                        object-fit: cover; 
-                        transform: translate(-0.5%, -0.5%); 
-                    }}
-                </style>
-            </head>
-            <body>
-                <img src="file:///{input_image_path.replace(os.sep, '/')}" />
-            </body>
-            </html>
-            """
-            
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8") as tmp:
-                tmp.write(html_content)
-                tmp_path = tmp.name
-
-            try:
-                page.goto(f"file:///{tmp_path.replace(os.sep, '/')}", wait_until="networkidle")
-                # 3. Take the high-quality 2x screenshot
-                page.screenshot(path=output_image_path, type="jpeg", quality=100)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                    
-            browser.close()
-
-        print(f"[✅] High-Quality Screenshot saved (Watermarks Destroyed): {output_image_path}")
-        return output_image_path
-    except Exception as e:
-        print(f"[❌] Image screenshot enhancement failed: {e}")
-        return input_image_path
-
-# ─────────────────────────────────────────────
-# 19. MAIN PIPELINE ORCHESTRATOR
-# ─────────────────────────────────────────────
-def stage_global_motion_tracking(video_path: str, options: dict) -> str:
-    # FUNCTION REMOVED AS PER LEGACY REQUEST
-    return video_path
 
 def run_pipeline(video_path: str, options_json: str) -> None:
     import json as _json
