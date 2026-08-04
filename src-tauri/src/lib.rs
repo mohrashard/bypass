@@ -249,6 +249,72 @@ async fn run_nexus_automator(
     Ok(full_output)
 }
 
+#[tauri::command]
+async fn run_carousel_engine(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, EngineState>,
+    action: String,
+    options_json: String,
+) -> Result<String, String> {
+    use tauri_plugin_shell::ShellExt;
+    use tauri_plugin_shell::process::CommandEvent;
+
+    let shell = app.shell();
+
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    let temp_path = std::env::temp_dir().join(format!("carousel_engine_{}.json", now));
+    std::fs::write(&temp_path, &options_json).map_err(|e| e.to_string())?;
+    let options_arg = temp_path.to_string_lossy().to_string();
+
+    #[cfg(debug_assertions)]
+    let command = {
+        let python_path = if cfg!(windows) {
+            "../ai_engine/venv/Scripts/python.exe"
+        } else {
+            "../ai_engine/venv/bin/python"
+        };
+        let script_name = "../ai_engine/carousel_engine.py".to_string();
+        shell.command(python_path).args([script_name, action, options_arg])
+    };
+
+    #[cfg(not(debug_assertions))]
+    let command = {
+        shell.sidecar("carousel_engine")
+            .map_err(|e| e.to_string())?
+            .args([action, options_arg])
+    };
+
+    let (mut rx, child) = command.spawn().map_err(|e| e.to_string())?;
+
+    *state.process.lock().unwrap() = Some(child);
+
+    let mut full_output = String::new();
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(line) => {
+                let out = String::from_utf8_lossy(&line).to_string();
+                full_output.push_str(&out);
+            }
+            CommandEvent::Stderr(line) => {
+                let out = String::from_utf8_lossy(&line).to_string();
+                full_output.push_str(&out);
+            }
+            CommandEvent::Terminated(payload) => {
+                *state.process.lock().unwrap() = None;
+                if payload.code == Some(0) {
+                    return Ok(full_output);
+                } else {
+                    return Err(format!("Process exited with code {:?}\n\nLog: {}", payload.code, full_output));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(full_output)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -258,7 +324,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, run_python_engine, run_nexus_engine, run_nexus_automator, stop_engine])
+        .invoke_handler(tauri::generate_handler![greet, run_python_engine, run_nexus_engine, run_nexus_automator, run_carousel_engine, stop_engine])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

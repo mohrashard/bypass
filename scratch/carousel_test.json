@@ -1,0 +1,20 @@
+{
+  "slides": [
+    {
+      "id": "slide-1",
+      "elements": [
+        {
+          "id": "el-1",
+          "type": "text",
+          "content": "Test text"
+        }
+      ]
+    }
+  ],
+  "theme_bg": "#0F172A",
+  "ratio": "1:1",
+  "show_swipe": true,
+  "show_dots": true,
+  "ui_color": "#3B82F6",
+  "preview_idx": 0
+}

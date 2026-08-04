@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import NexusTab from './NexusTab';
 import LeadEngineTab from './LeadEngineTab';
 import NexusAutomatorTab from './NexusAutomatorTab';
+import CarouselTab from './CarouselTab';
 
 const NOISE_PATTERNS = [
   /UserWarning/, /FutureWarning/, /DeprecationWarning/,
@@ -53,7 +54,7 @@ export interface SceneConfig {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'utility' | 'nexus' | 'lead' | 'automator'>('utility');
+  const [activeTab, setActiveTab] = useState<'utility' | 'nexus' | 'lead' | 'automator' | 'carousel'>('utility');
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPreviewVertical, setIsPreviewVertical] = useState(false);
@@ -667,7 +668,7 @@ export default function App() {
     <main className="h-screen h-[100dvh] overflow-hidden text-white font-sans flex flex-col bg-[#09090b]">
 
       <nav className="border-b border-zinc-800 bg-zinc-950 px-4 py-3 flex justify-center gap-3">
-        {([['utility', '⚙️ Utility Pipe', 'emerald'], ['nexus', '🧠 Nexus Studio', 'purple'], ['lead', '🚀 Lead Engine', 'orange'], ['automator', '🎬 Automator', 'pink']] as const).map(
+        {([['utility', '⚙️ Utility Pipe', 'emerald'], ['nexus', '🧠 Nexus Studio', 'purple'], ['lead', '🚀 Lead Engine', 'orange'], ['automator', '🎬 Automator', 'pink'], ['carousel', '🖼️ Carousels', 'blue']] as const).map(
           ([tab, label, color]) => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className={`px-6 py-2 rounded-lg font-medium text-sm transition-all ${activeTab === tab
@@ -677,7 +678,9 @@ export default function App() {
                   ? 'bg-purple-600 text-white shadow-[0_0_12px_rgba(147,51,234,0.4)]'
                   : color === 'orange'
                   ? 'bg-orange-600 text-white shadow-[0_0_12px_rgba(234,88,12,0.4)]'
-                  : 'bg-pink-600 text-white shadow-[0_0_12px_rgba(219,39,119,0.4)]'
+                  : color === 'pink'
+                  ? 'bg-pink-600 text-white shadow-[0_0_12px_rgba(219,39,119,0.4)]'
+                  : 'bg-blue-600 text-white shadow-[0_0_12px_rgba(37,99,235,0.4)]'
                 : 'bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800'}`}>
               {label}
             </button>
@@ -2081,6 +2084,8 @@ export default function App() {
         <LeadEngineTab />
       ) : activeTab === 'automator' ? (
         <NexusAutomatorTab />
+      ) : activeTab === 'carousel' ? (
+        <CarouselTab />
       ) : null}
     </main>
   );
