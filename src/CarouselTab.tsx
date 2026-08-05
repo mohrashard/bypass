@@ -6,6 +6,7 @@ interface Element {
   id: string;
   type: 'text' | 'image';
   content: string;
+  preset?: string;
   font?: string;
   size?: number;
   color?: string;
@@ -44,7 +45,7 @@ export default function CarouselTab() {
       {
         id: 'slide-1',
         elements: [
-          { id: 'el-1', type: 'text', content: 'How to get 10 customers with $0', font: 'Mate', size: 40, color: '#F8FAFC', x: 50, y: 50, bg_color: 'transparent', bg_padding: 15, bg_radius: 0, stroke_color: 'transparent', stroke_width: 0, shadow_color: 'transparent', shadow_blur: 0, shadow_x: 0, shadow_y: 0 }
+          { id: 'el-1', type: 'text', content: 'How to get 10 customers with $0', preset: 'p-glass-silver', font: 'Montserrat', size: 40, color: '#F8FAFC', x: 50, y: 50, bg_color: 'transparent', bg_padding: 15, bg_radius: 0, stroke_color: 'transparent', stroke_width: 0, shadow_color: 'transparent', shadow_blur: 0, shadow_x: 0, shadow_y: 0 }
         ]
       }
     ],
@@ -112,7 +113,7 @@ export default function CarouselTab() {
     const newSlides = config.slides.map((slide, i) => i === activeSlideIdx ? {
       ...slide,
       elements: [...slide.elements, {
-        id: `el-${Date.now()}`, type: 'text' as const, content: 'New Text', font: 'Proxima Nova', size: 30, color: '#F8FAFC', x: 50, y: 50,
+        id: `el-${Date.now()}`, type: 'text' as const, content: 'New Text', preset: 'custom', font: 'Montserrat', size: 30, color: '#F8FAFC', x: 50, y: 50,
         bg_color: 'transparent', bg_padding: 15, bg_radius: 0,
         stroke_color: 'transparent', stroke_width: 0,
         shadow_color: 'transparent', shadow_blur: 0, shadow_x: 0, shadow_y: 0
@@ -154,23 +155,8 @@ export default function CarouselTab() {
     setConfig({ ...config, slides: newSlides });
   };
 
-  const applyPreset = (elId: string, presetName: string) => {
-    let updates: Partial<Element> = {};
-    if (presetName === 'default') {
-       updates = { color: '#F8FAFC', bg_color: 'transparent', stroke_color: 'transparent', stroke_width: 0, shadow_color: 'transparent', shadow_blur: 0, shadow_x: 0, shadow_y: 0 };
-    } else if (presetName === 'minimalist') {
-       updates = { color: '#F8FAFC', bg_color: 'transparent', stroke_color: 'transparent', stroke_width: 0, shadow_color: '#000000', shadow_blur: 10, shadow_x: 0, shadow_y: 4 };
-    } else if (presetName === 'electric-glow') {
-       updates = { color: '#00FFFF', bg_color: 'transparent', stroke_color: 'transparent', stroke_width: 0, shadow_color: '#00FFFF', shadow_blur: 20, shadow_x: 0, shadow_y: 0 };
-    } else if (presetName === 'hormozi-bold') {
-       updates = { color: '#FFDE59', bg_color: 'transparent', stroke_color: '#000000', stroke_width: 3, shadow_color: '#000000', shadow_blur: 0, shadow_x: 6, shadow_y: 6 };
-    } else if (presetName === 'glassmorphism') {
-       updates = { color: '#FFFFFF', bg_color: 'rgba(255,255,255,0.1)', bg_padding: 20, bg_radius: 12, stroke_color: 'transparent', stroke_width: 0, shadow_color: 'transparent' };
-    } else if (presetName === 'black-box') {
-       updates = { color: '#FFFFFF', bg_color: '#000000', bg_padding: 15, bg_radius: 8, stroke_color: 'transparent', stroke_width: 0, shadow_color: 'transparent' };
-    }
-    handleUpdateElement(elId, updates);
-  };
+  // Presets are now handled natively by the python backend via CSS classes
+  // We just set the 'preset' property on the element.
 
 
   const handleRenderFinal = async () => {
@@ -311,14 +297,22 @@ export default function CarouselTab() {
                         <select value={el.font} onChange={e => handleUpdateElement(el.id, { font: e.target.value })} className="w-full bg-zinc-950 border border-zinc-700 text-xs rounded p-1 outline-none">
                           {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
                         </select>
-                        <select value="custom" onChange={e => applyPreset(el.id, e.target.value)} className="w-full bg-zinc-950 border border-pink-700/50 text-xs rounded p-1 outline-none text-pink-300 font-bold">
-                          <option value="custom">Load Preset...</option>
-                          <option value="default">Default Clean</option>
-                          <option value="minimalist">Minimalist Shadow</option>
-                          <option value="electric-glow">Electric Glow</option>
-                          <option value="hormozi-bold">🔥 Secret Sauce (Retainer)</option>
-                          <option value="glassmorphism">Glass Block</option>
-                          <option value="black-box">High-Contrast Box</option>
+                        <select value={el.preset || 'custom'} onChange={e => handleUpdateElement(el.id, { preset: e.target.value })} className="w-full bg-zinc-950 border border-pink-700/50 text-xs rounded p-1 outline-none text-pink-300 font-bold">
+                          <option value="custom">Custom Style (Use Sliders)</option>
+                          <option value="p-glass-silver">Glass Silver</option>
+                          <option value="p-clean-white">Clean White</option>
+                          <option value="p-heavy-stroke">Heavy Stroke</option>
+                          <option value="p-soft-yellow">Soft Yellow</option>
+                          <option value="p-neon-base">Neon Base</option>
+                          <option value="p-silver-translucent">Silver Translucent</option>
+                          <option value="p-sunset-glow">Sunset Glow</option>
+                          <option value="s-electric-teal">Electric Teal</option>
+                          <option value="s-hormozi-yellow">Hormozi Yellow</option>
+                          <option value="s-crimson-red">Crimson Red</option>
+                          <option value="s-cyber-purple">Cyber Purple</option>
+                          <option value="s-luxury-gold">Luxury Gold</option>
+                          <option value="s-dark-blue-glow">Dark Blue Glow</option>
+                          <option value="s-matrix-green">Matrix Green</option>
                         </select>
                         <div className="flex gap-2 col-span-2">
                           <input type="number" value={el.size} onChange={e => handleUpdateElement(el.id, { size: parseInt(e.target.value) })} className="w-16 bg-zinc-950 border border-zinc-700 text-xs rounded p-1 outline-none text-center" title="Font Size" />

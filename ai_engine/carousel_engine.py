@@ -11,6 +11,7 @@ class Element(BaseModel):
     id: str
     type: str
     content: str
+    preset: str = "none"
     font: str = "Mate"
     size: int = 40
     color: str = "#F8FAFC"
@@ -62,14 +63,22 @@ def render_elements(slide: SlideContext):
     for elem in slide.elements:
         if elem.type == "text":
             font = get_font_family(elem.font)
-            css_styles = f"position: absolute; left: {elem.x}%; top: {elem.y}%; transform: translate(-50%, -50%); font-family: {font}; font-size: {elem.size}px; color: {elem.color}; white-space: pre-wrap; text-align: center; line-height: 1.2; width: max-content; max-width: 90%; z-index: 10;"
+            classes = ""
+            if elem.preset and elem.preset not in ["none", "custom"]:
+                classes = f"base-cap {elem.preset}"
+                css_styles = f"position: absolute; left: {elem.x}%; top: {elem.y}%; transform: translate(-50%, -50%); font-family: {font}; font-size: {elem.size}px; white-space: pre-wrap; text-align: center; line-height: 1.2; width: max-content; max-width: 90%; z-index: 10;"
+            else:
+                css_styles = f"position: absolute; left: {elem.x}%; top: {elem.y}%; transform: translate(-50%, -50%); font-family: {font}; font-size: {elem.size}px; color: {elem.color}; white-space: pre-wrap; text-align: center; line-height: 1.2; width: max-content; max-width: 90%; z-index: 10;"
+            
             if elem.bg_color and elem.bg_color != "transparent":
                 css_styles += f" background-color: {elem.bg_color}; padding: {elem.bg_padding}px; border-radius: {elem.bg_radius}px;"
-            if elem.stroke_color and elem.stroke_color != "transparent" and elem.stroke_width > 0:
-                css_styles += f" -webkit-text-stroke: {elem.stroke_width}px {elem.stroke_color};"
-            if elem.shadow_color and elem.shadow_color != "transparent" and (elem.shadow_blur > 0 or elem.shadow_x != 0 or elem.shadow_y != 0):
-                css_styles += f" text-shadow: {elem.shadow_x}px {elem.shadow_y}px {elem.shadow_blur}px {elem.shadow_color};"
-            html += f'<div style="{css_styles}">{elem.content}</div>'
+                
+            if not classes:
+                if elem.stroke_color and elem.stroke_color != "transparent" and elem.stroke_width > 0:
+                    css_styles += f" -webkit-text-stroke: {elem.stroke_width}px {elem.stroke_color};"
+                if elem.shadow_color and elem.shadow_color != "transparent" and (elem.shadow_blur > 0 or elem.shadow_x != 0 or elem.shadow_y != 0):
+                    css_styles += f" text-shadow: {elem.shadow_x}px {elem.shadow_y}px {elem.shadow_blur}px {elem.shadow_color};"
+            html += f'<div class="{classes}" style="{css_styles}">{elem.content}</div>'
         elif elem.type == "image":
             try:
                 if os.path.exists(elem.content):
@@ -97,15 +106,40 @@ def render_retention_ui(config: CarouselConfig, is_last_slide: bool = False, cur
         html += f'<div style="position: absolute; right: 5%; top: 50%; transform: translateY(-50%); color: {config.ui_color}; font-size: 32px; font-weight: bold; opacity: 0.8; font-family: sans-serif;">›</div>'
     return html
 
+def get_preset_css():
+    return """
+  .base-cap {
+    font-weight: 900; letter-spacing: -1px; line-height: 1; white-space: pre-wrap;
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text; color: transparent;
+  }
+  .p-glass-silver { background-image: linear-gradient(160deg, #fff 0%, #d2e8ff 30%, #b4d7ff 55%, #ebf6ff 75%, #fff 100%); filter: drop-shadow(0 0 10px rgba(140,185,255,0.50)) drop-shadow(0 1px 3px rgba(60,100,200,0.35)); }
+  .p-clean-white  { background-image: linear-gradient(to bottom, #ffffff 0%, #e0e0e0 100%); filter: drop-shadow(0 3px 6px rgba(0,0,0,0.8)); }
+  .p-heavy-stroke { background-image: linear-gradient(to bottom, #ffffff, #ffffff); filter: drop-shadow(2px 0 0 #000) drop-shadow(-2px 0 0 #000) drop-shadow(0 2px 0 #000) drop-shadow(0 -2px 0 #000) drop-shadow(0 5px 12px rgba(0,0,0,0.9)); }
+  .p-soft-yellow  { background-image: linear-gradient(to bottom, #FFFDE7 0%, #FFF176 100%); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7)); }
+  .p-neon-base    { background-image: linear-gradient(to bottom, #ffffff 0%, #e0f7fa 100%); filter: drop-shadow(0 0 10px rgba(0,255,255,0.4)) drop-shadow(0 2px 2px rgba(0,0,0,0.8)); }
+  .p-silver-translucent { background-image: linear-gradient(160deg, rgba(255,255,255,0.9) 0%, rgba(200,225,255,0.6) 100%); filter: drop-shadow(0 0 10px rgba(180,200,255,0.4)) drop-shadow(0 1px 2px rgba(0,0,0,0.8)); }
+  .p-sunset-glow  { background-image: linear-gradient(160deg, #ff7e5f 0%, #feb47b 100%); filter: drop-shadow(0 0 12px rgba(255,126,95,0.6)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }
+
+  .s-electric-teal  { background-image: linear-gradient(to right, #00dcc8 0%, #00c3d2 50%, #00aadc 100%); filter: drop-shadow(0 0 8px rgba(0,210,200,0.75)) drop-shadow(0 1px 3px rgba(0,150,180,0.55)); }
+  .s-hormozi-yellow { background-image: linear-gradient(to bottom, #FFE81F 0%, #FF8A00 100%); filter: drop-shadow(0 0 15px rgba(255,165,0,0.6)) drop-shadow(0 3px 6px rgba(0,0,0,0.9)); }
+  .s-crimson-red    { background-image: linear-gradient(to bottom, #ff4b4b 0%, #b30000 100%); filter: drop-shadow(0 0 12px rgba(255,0,0,0.6)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }
+  .s-cyber-purple   { background-image: linear-gradient(to right, #d500f9 0%, #651fff 100%); filter: drop-shadow(0 0 15px rgba(213,0,249,0.7)) drop-shadow(0 2px 4px rgba(0,0,0,0.8)); }
+  .s-luxury-gold    { background-image: linear-gradient(160deg, #FFF7D6 0%, #F3DA7C 30%, #D4AF37 70%, #AA7700 100%); filter: drop-shadow(0 0 12px rgba(212,175,55,0.5)) drop-shadow(0 2px 5px rgba(0,0,0,0.8)); }
+  .s-dark-blue-glow { background-image: linear-gradient(to bottom, #4facfe 0%, #001ba8 100%); filter: drop-shadow(0 0 16px rgba(0,40,200,0.85)) drop-shadow(0 3px 5px rgba(0,0,0,0.9)); }
+  .s-matrix-green   { background-image: linear-gradient(to bottom, #00FF00 0%, #008000 100%); filter: drop-shadow(0 0 15px rgba(0,255,0,0.7)) drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }
+"""
+
 def generate_html_single(slide: SlideContext, config: CarouselConfig, current_idx: int, total_slides: int):
     elements_html = render_elements(slide)
     ui_html = render_retention_ui(config, current_idx == total_slides - 1, current_idx, total_slides)
+    preset_css = get_preset_css()
     return f"""
     <!DOCTYPE html><html><head>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Gemunu+Libre:wght@400;700&family=Mate:ital,wght@0,400;0,400i;1,400;1,400i&family=Montserrat:wght@400;700&family=Pacifico&family=Inter:wght@400;700&display=swap" rel="stylesheet">
-        <style>body {{ margin: 0; padding: 0; background-color: {config.theme_bg}; height: 100vh; width: 100vw; overflow: hidden; position: relative; }}</style>
+        <link href="https://fonts.googleapis.com/css2?family=Anton&family=Bangers&family=Great+Vibes&family=Oswald:wght@700&family=Poppins:wght@800;900&family=Gemunu+Libre:wght@400;700&family=Mate:ital,wght@0,400;0,400i;1,400;1,400i&family=Montserrat:wght@400;700;800;900&family=Pacifico&family=Inter:wght@400;700&display=swap" rel="stylesheet">
+        <style>body {{ margin: 0; padding: 0; background-color: {config.theme_bg}; height: 100vh; width: 100vw; overflow: hidden; position: relative; }} {preset_css}</style>
     </head><body>{elements_html}{ui_html}</body></html>
     """
 
@@ -140,8 +174,8 @@ async def run_render(config: CarouselConfig):
         multi_html += "@page { size: " + f"{w}px {h}px" + "; margin: 0; }"
         multi_html += "body { margin: 0; padding: 0; }"
         multi_html += ".slide { width: " + f"{w}px; height: {h}px;" + " page-break-after: always; position: relative; overflow: hidden; background-color: " + config.theme_bg + "; }"
-        multi_html += "</style>"
-        multi_html += '<link href="https://fonts.googleapis.com/css2?family=Gemunu+Libre:wght@400;700&family=Mate:ital,wght@0,400;0,400i;1,400;1,400i&family=Montserrat:wght@400;700&family=Pacifico&family=Inter:wght@400;700&display=swap" rel="stylesheet"></head><body>'
+        multi_html += f"{get_preset_css()}</style>"
+        multi_html += '<link href="https://fonts.googleapis.com/css2?family=Anton&family=Bangers&family=Great+Vibes&family=Oswald:wght@700&family=Poppins:wght@800;900&family=Gemunu+Libre:wght@400;700&family=Mate:ital,wght@0,400;0,400i;1,400;1,400i&family=Montserrat:wght@400;700;800;900&family=Pacifico&family=Inter:wght@400;700&display=swap" rel="stylesheet"></head><body>'
         
         for idx, slide in enumerate(config.slides):
             elements_html = render_elements(slide)
